@@ -57,6 +57,15 @@
         this.touchStartTime = 0;
         this.isSwiping = false;
 
+        // Gamepad support. The Gamepad API has no button press/release
+        // events, so connected pads are polled once per animation frame
+        // on their own loop (see pollGamepad) and diffed against the
+        // previous frame's button state to synthesize key-like events.
+        this.gamepadIndex = null;
+        this.previousGamepadState = null;
+        this.gamepadPolling = false;
+        this.boundPollGamepad = this.pollGamepad.bind(this);
+
         this.playCount = 0;
 
         // Sound FX.
@@ -94,6 +103,9 @@
         this.windLines = [];
         this.windAudio = new Audio('./assets/wind.mp3');
         this.windAudio.loop = false;
+
+        // Bonus pickup audio
+        this.bonusAudio = new Audio('./assets/bonus.mp3');
 		
 		this.isOnIce = false;
 
@@ -101,6 +113,22 @@
         this.glitchTimer = 0;
         this.glitchCooldown = getRandomNum(5000, 22000); // Random glitch every 10–22s
         this.activeGlitchClass = '';
+
+        // Screen shake (triggered on crash, see gameOver)
+        this.shakeTimer = 0;
+        this.shakeIntensity = 0;
+
+        // Identity Crisis mechanic
+        this.nextIdentityCrisisScore = 1500;
+        this.nextIdentityCrisisPreloadScore = 1000;
+        this.preloadedIdentity = null;
+        this.identityCrisisDisplayTimer = 0;
+        this.identityCrisisThemeName = '';
+        var params = new URLSearchParams(window.location.search);
+        this.currentTheme = params.get('theme') || localStorage.getItem('dino_theme') || 'color';
+
+        // Weight of Being (Dread Meter)
+        this.dreadLevel = 0; // 0 to 100%
         
         // Philosophical quotes system
         this.quoteTimer = 0;
@@ -322,7 +350,8 @@
             "Perhaps I should think less and jump more. You seem to be good at that.",
             "Plato and Batman both have caves.",
             "Pretend I said something witty. Just don't expect me to say it.",
-            "Reality is defined by our perception of it. Do you dare look away?",
+            "Reality is defined by our perception of it. But what if you don't really want to see?",
+			"Reality is defined by our perception of it. Do you dare look away?",
             "Reality is good joke. The best joke.",
             "Sartre said we are condemned to be free. Then what am I, condemned only to your spacebar?",
             "Schopenhauer believed life swings like a pendulum between suffering and boredom. He basically predicted this entire gameplay loop.",
@@ -653,7 +682,9 @@
         VISIBILITY: 'visibilitychange',
         BLUR: 'blur',
         FOCUS: 'focus',
-        LOAD: 'load'
+        LOAD: 'load',
+        GAMEPADCONNECTED: 'gamepadconnected',
+        GAMEPADDISCONNECTED: 'gamepaddisconnected'
     };
 
     Runner.prototype = {
@@ -1087,16 +1118,29 @@
             var deltaTime = now - (this.time || now);
             this.time = now;
 
+            // Screen shake: decay the timer and derive this frame's jitter.
+            // Applied via canvasCtx.translate() around all drawing below,
+            // after each branch's clearCanvas() so the clear itself is
+            // never offset. Magnitude fades linearly to 0 over the
+            // 400ms duration set in gameOver().
+            var shakeX = 0;
+            var shakeY = 0;
+            if (this.shakeTimer > 0) {
+                this.shakeTimer = Math.max(0, this.shakeTimer - deltaTime);
+                var shakeMagnitude = Math.round((this.shakeIntensity || 0) *
+                    (this.shakeTimer / 400));
+                if (shakeMagnitude > 0) {
+                    shakeX = getRandomNum(-shakeMagnitude, shakeMagnitude);
+                    shakeY = getRandomNum(-shakeMagnitude, shakeMagnitude);
+                }
+            }
+
             if (this.playing) {
                 this.clearCanvas();
+                this.canvasCtx.save();
+                this.canvasCtx.translate(shakeX, shakeY);
 
-                // 1. Calculate effective speed immediately
-                var speedMultiplier = (this.windTimer > 0 ? 0.60 : 1.0) * (this.isOnIce ? 1.40 : 1.0);
-                var effectiveSpeed = this.currentSpeed * speedMultiplier;
                 var currentDelta = (this.playingIntro || !this.activated) ? 0 : deltaTime;
-
-                // 2. Draw and advance parallax background under all other elements
-                this.drawParallax(currentDelta, effectiveSpeed);
 
                 // Philosophical quote system
                 this.quoteTimer += deltaTime;
@@ -1145,7 +1189,13 @@
                     deltaTime *= 0.5;
                 }
 
-                // Wind gust update & speed modifier
+                // Wind gust update. This runs *before* the speed calculation
+                // below so drawParallax and the horizon/obstacles always see
+                // the same, current-frame windTimer state - previously this
+                // was computed once before this decrement (for the parallax
+                // background) and again after (for the horizon), so on the
+                // exact frame a gust started or ended the background would
+                // scroll at a different speed than the ground for one frame.
                 if (this.windTimer > 0) {
                     this.windTimer = Math.max(0, this.windTimer - deltaTime);
                     if (this.windTimer === 0 && this.windAudio) {
@@ -1159,9 +1209,16 @@
                     }
                 }
 
-                // Apply wind speed reduction and ice sliding speed boost
+                // Effective speed for this frame, applying the wind slowdown
+                // and ice speed boost. Computed once and shared by the
+                // parallax background below and the horizon/obstacles
+                // further down - see note above.
                 var speedMultiplier = (this.windTimer > 0 ? 0.60 : 1.0) * (this.isOnIce ? 1.40 : 1.0);
-                
+                var effectiveSpeed = this.currentSpeed * speedMultiplier;
+
+                // Draw and advance parallax background under all other elements
+                this.drawParallax(currentDelta, effectiveSpeed);
+
                 // Handle delayed jump on ice
                 if (this.tRex.jumpDelayTimer > 0) {
                     this.tRex.jumpDelayTimer -= deltaTime;
@@ -1185,8 +1242,6 @@
                 if (this.tRex.jumpCount == 1 && !this.playingIntro) {
                     this.playIntro();
                 }
-
-                var effectiveSpeed = this.currentSpeed * speedMultiplier;
 
                 // The horizon doesn't move until the intro is over.
                 if (this.playingIntro) {
@@ -1434,6 +1489,17 @@
                 var collision = hasObstacles && this.horizon.obstacles.length > 0 &&
                     checkForCollision(this.horizon.obstacles[0], this.tRex);
 
+                if (collision === 'shielded') {
+                    // The shield absorbs this one hit, then grants a brief
+                    // grace period to pass through the obstacle that
+                    // triggered it. checkForCollision only reports that a
+                    // shield would absorb the hit; consuming it is this
+                    // caller's job, not the collision checker's.
+                    this.tRex.hasShield = false;
+                    this.shieldInvulnerableTimer = 500;
+                    collision = false;
+                }
+
                 if (!collision) {
                     this.distanceRan += effectiveSpeed * deltaTime / this.msPerFrame;
 
@@ -1453,9 +1519,21 @@
                 }
 
                 if (this.bonusItem) {
-                    
                     this.bonusItem.update(deltaTime, this.currentSpeed);
+
+                    // Case A: Epiphany Node Acquired -> Relieves the Weight of Being (-35%)
                     if (this.checkBonusCollision(this.bonusItem, this.tRex)) {
+                        this.dreadLevel = Math.max(0, this.dreadLevel - 35);
+                        this.updateWeightOfBeing();
+
+                        // Play bonus collection sound
+                        if (this.bonusAudio) {
+                            this.bonusAudio.currentTime = 0;
+                            this.bonusAudio.play().catch(function () {
+                                // Handled if browser autoplay policy restricts playback
+                            });
+                        }
+
                         // Random Power-up selection
                         var powerUps = ['SHIELD', 'INVINCIBILITY', 'INVISIBLE', 'POINTS', 'SLOW_TIME', 'DOUBLE_JUMP', 'FLUTTER', 'LASER'];
                         var chosenPowerUp = powerUps[getRandomNum(0, powerUps.length - 1)];
@@ -1493,8 +1571,15 @@
                                 isFirework: true
                             }));
                         }
-                    } else if (this.bonusItem.remove) {
+                    } 
+                    // Case B: Node Missed / Scrolled Off-Screen -> Gravity & Dread Increase (+25%)
+                    else if (this.bonusItem.remove) {
                         this.bonusItem = null;
+                        this.dreadLevel = Math.min(100, this.dreadLevel + 25);
+                        this.updateWeightOfBeing();
+
+                        // Fleeting visual distortion when dread increases
+                        this.triggerGlitch();
                     }
                 }
 
@@ -1542,7 +1627,8 @@
                     }
                     var boxWidth = maxLineWidth + 20;
                     var boxX = centerX - (boxWidth / 2);
-                    var boxY = 20;
+                    // Calculate Y position to sit cleanly below the active HUD meters
+                    var boxY = (this.identityCrisisDisplayTimer > 0) ? 56 : 24;
 
                     // Semi-transparent background overlay rectangle for legibility across themes & night mode
                     this.canvasCtx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.85)' : 'rgba(5, 6, 40, 0.85)';
@@ -1644,8 +1730,28 @@
                         }
                     }
                 }
+
+                // Identity Crisis: Check 1000-pt preload and 1500-pt trigger milestones
+                if (actualDistance >= this.nextIdentityCrisisPreloadScore && !this.preloadedIdentity) {
+                    this.preloadIdentityCrisis();
+                    this.nextIdentityCrisisPreloadScore += 1500;
+                }
+                if (actualDistance >= this.nextIdentityCrisisScore) {
+                    this.triggerIdentityCrisis();
+                }
+
+                // Render Identity Crisis banner at top of the screen
+                if (this.identityCrisisDisplayTimer > 0) {
+                    this.identityCrisisDisplayTimer -= deltaTime;
+                    this.drawIdentityCrisisBanner();
+                }
+
+                // Render Weight of Being HUD at top center
+                this.drawWeightOfBeingHUD();
             } else if (this.crashed) {
                 this.clearCanvas();
+                this.canvasCtx.save();
+                this.canvasCtx.translate(shakeX, shakeY);
                 this.drawParallax(0, 0);
                 this.horizon.update(0, 0, true);
                 if (this.gameOverPanel) {
@@ -1665,6 +1771,14 @@
                         this.particles.splice(p, 1);
                     }
                 }
+            }
+
+            // Undo the shake translate applied above - exactly one of the
+            // two branches above runs save() per frame (they're mutually
+            // exclusive, and a mid-frame gameOver() flips playing->crashed
+            // without clearing either flag), so this always balances it.
+            if (this.playing || this.crashed) {
+                this.canvasCtx.restore();
             }
 
             // Existential visual glitch update
@@ -1689,7 +1803,6 @@
                 switch (evtType) {
                     case events.KEYDOWN:
                     case events.MOUSEDOWN:
-                    case events.GAMEPADCONNECTED:
                         this.onKeyDown(e);
                         break;
                     case 'touchstart':
@@ -1704,6 +1817,12 @@
                     case events.KEYUP:
                     case events.MOUSEUP:
                         this.onKeyUp(e);
+                        break;
+                    case events.GAMEPADCONNECTED:
+                        this.onGamepadConnected(e);
+                        break;
+                    case events.GAMEPADDISCONNECTED:
+                        this.onGamepadDisconnected(e);
                         break;
                 }
             }.bind(this))(e.type, Runner.events);
@@ -1798,6 +1917,24 @@
                 document.addEventListener(Runner.events.MOUSEDOWN, this);
                 document.addEventListener(Runner.events.MOUSEUP, this);
             }
+
+            // Gamepad. Connect/disconnect fire on window, per spec.
+            if ('getGamepads' in navigator) {
+                window.addEventListener(Runner.events.GAMEPADCONNECTED, this);
+                window.addEventListener(Runner.events.GAMEPADDISCONNECTED, this);
+
+                // Some browsers only fire 'gamepadconnected' for pads that
+                // become active after the listener is attached. Pick up
+                // any pad that was already connected (and had a button
+                // pressed, per the spec) before we started listening.
+                var existingPads = navigator.getGamepads();
+                for (var g = 0; g < existingPads.length; g++) {
+                    if (existingPads[g]) {
+                        this.onGamepadConnected({ gamepad: existingPads[g] });
+                        break;
+                    }
+                }
+            }
         },
 
         /**
@@ -1815,6 +1952,12 @@
                 document.removeEventListener(Runner.events.MOUSEDOWN, this);
                 document.removeEventListener(Runner.events.MOUSEUP, this);
             }
+
+            if ('getGamepads' in navigator) {
+                window.removeEventListener(Runner.events.GAMEPADCONNECTED, this);
+                window.removeEventListener(Runner.events.GAMEPADDISCONNECTED, this);
+            }
+            this.gamepadPolling = false;
         },
 
         /**
@@ -1933,6 +2076,119 @@
         },
 
         /**
+         * A gamepad became available. Start polling it; the Gamepad API
+         * has no button press/release events, only a point-in-time
+         * snapshot via navigator.getGamepads(), so state has to be
+         * diffed frame to frame (see pollGamepad).
+         * @param {GamepadEvent|{gamepad: Gamepad}} e
+         */
+        onGamepadConnected: function (e) {
+            this.gamepadIndex = e.gamepad.index;
+            this.previousGamepadState = { jump: false, duck: false, pause: false };
+
+            if (!this.gamepadPolling) {
+                this.gamepadPolling = true;
+                this.pollGamepad();
+            }
+        },
+
+        /**
+         * A gamepad was unplugged or lost its connection.
+         * @param {GamepadEvent} e
+         */
+        onGamepadDisconnected: function (e) {
+            if (this.gamepadIndex === e.gamepad.index) {
+                this.gamepadIndex = null;
+                this.previousGamepadState = null;
+                this.gamepadPolling = false;
+            }
+        },
+
+        /**
+         * Poll the active gamepad once per animation frame and translate
+         * button edges into the same keydown/keyup events the keyboard
+         * uses, so jump, duck, pause and restart all reuse the existing
+         * handlers instead of duplicating game-state logic. This runs on
+         * its own rAF loop, independent of scheduleNextUpdate, because
+         * the main update loop stops scheduling frames once the idle
+         * T-Rex finishes its blink cycle while waiting for the player to
+         * start - polling still needs to run so a button press can wake
+         * the game back up.
+         */
+        pollGamepad: function () {
+            if (!this.gamepadPolling || this.gamepadIndex === null) {
+                return;
+            }
+
+            var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+            var pad = pads[this.gamepadIndex];
+
+            if (pad) {
+                var prev = this.previousGamepadState;
+
+                // Any face button (A/B/X/Y, indices 0-3 on the standard
+                // mapping) jumps, confirms, and restarts after a crash.
+                var jumpPressed = false;
+                for (var i = 0; i < 4 && i < pad.buttons.length; i++) {
+                    if (pad.buttons[i] && pad.buttons[i].pressed) {
+                        jumpPressed = true;
+                        break;
+                    }
+                }
+
+                // D-pad down (button 13) or the left stick pulled down ducks.
+                var duckPressed = !!(pad.buttons[13] && pad.buttons[13].pressed) ||
+                    (pad.axes.length > 1 && pad.axes[1] > 0.5);
+
+                // Start/Options (button 9) pauses/resumes, like Escape.
+                var pausePressed = !!(pad.buttons[9] && pad.buttons[9].pressed);
+
+                this.fireGamepadKey(32, jumpPressed, prev.jump);
+                this.fireGamepadKey(40, duckPressed, prev.duck);
+
+                if (pausePressed && !prev.pause) {
+                    this.onKeyDown({
+                        keyCode: 27,
+                        type: Runner.events.KEYDOWN,
+                        preventDefault: function () {},
+                        target: null
+                    });
+                }
+
+                prev.jump = jumpPressed;
+                prev.duck = duckPressed;
+                prev.pause = pausePressed;
+            }
+
+            requestAnimationFrame(this.boundPollGamepad);
+        },
+
+        /**
+         * Synthesize a keydown (on press) or keyup (on release) for a
+         * gamepad button edge, using the spacebar/down-arrow keycodes so
+         * the input flows through the real onKeyDown/onKeyUp handlers.
+         * @param {number} keyCode
+         * @param {boolean} isPressed Current frame's button state.
+         * @param {boolean} wasPressed Previous frame's button state.
+         */
+        fireGamepadKey: function (keyCode, isPressed, wasPressed) {
+            if (isPressed === wasPressed) {
+                return;
+            }
+            var fakeEvent = {
+                keyCode: keyCode,
+                type: isPressed ? Runner.events.KEYDOWN : Runner.events.KEYUP,
+                preventDefault: function () {},
+                target: null
+            };
+            if (isPressed) {
+                this.onKeyDown(fakeEvent);
+            } else {
+                this.onKeyUp(fakeEvent);
+            }
+        },
+
+        /**
          * RequestAnimationFrame wrapper.
          */
         scheduleNextUpdate: function () {
@@ -2025,6 +2281,8 @@
                 this.tRex.jumpPending = false;
                 this.tRex.jumpDelayTimer = 0;
             }
+            this.identityCrisisDisplayTimer = 0;
+            this.preloadedIdentity = null;
         },
 
         stop: function () {
@@ -2117,6 +2375,13 @@
                 this.isOnIce = false;
                 this.clearGlitch();
                 this.glitchCooldown = getRandomNum(5000, 22000);
+                this.nextIdentityCrisisScore = 1500;
+                this.nextIdentityCrisisPreloadScore = 1000;
+                this.preloadedIdentity = null;
+                this.identityCrisisDisplayTimer = 0;
+                this.identityCrisisThemeName = '';
+                this.dreadLevel = 0;
+                this.updateWeightOfBeing();
                 if (this.tRex) {
                     this.tRex.isSlipping = false;
                     this.tRex.jumpPending = false;
@@ -2367,6 +2632,202 @@
             }
             this.glitchTimer = 0;
         },
+
+        /**
+         * Returns a list of candidate theme keys (excluding 'random').
+         * @return {Array<string>}
+         */
+        getCandidateThemes: function () {
+            var themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
+            if (themesObj) {
+                return Object.keys(themesObj).filter(function (key) {
+                    return key !== 'random';
+                });
+            }
+            return ['color', 'batman', 'covid', 'mario', 'sonic', 'zelda', 'dina', 'cow'];
+        },
+
+        /**
+         * Preload the next theme assets at the 1000-pt interval for seamless mid-stride swapping.
+         */
+        preloadIdentityCrisis: function () {
+            var candidates = this.getCandidateThemes();
+            var self = this;
+            var available = candidates.filter(function (k) { return k !== self.currentTheme; });
+            if (available.length === 0) available = candidates;
+
+            var nextTheme = available[Math.floor(Math.random() * available.length)];
+            var themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
+            var themeData = themesObj ? themesObj[nextTheme] : null;
+
+            var spriteSrc = '';
+            if (themeData) {
+                spriteSrc = IS_HIDPI ? themeData.sprite2x : themeData.sprite1x;
+            } else {
+                spriteSrc = IS_HIDPI ?
+                    'assets/' + nextTheme + '_200_percent/200-offline-sprite.png' :
+                    'assets/' + nextTheme + '_100_percent/100-offline-sprite.png';
+            }
+
+            var preloadedSprite = new Image();
+            preloadedSprite.src = spriteSrc;
+
+            var preloadedParallax = new Image();
+            preloadedParallax.src = './assets/' + nextTheme + '_200_percent/parallax.png';
+
+            var preloadedBonus = new Image();
+            preloadedBonus.src = './assets/' + nextTheme + '_200_percent/bonus.png';
+
+            this.preloadedIdentity = {
+                themeKey: nextTheme,
+                themeTitle: (themeData && themeData.footerTitle) ? themeData.footerTitle : nextTheme.toUpperCase(),
+                sprite: preloadedSprite,
+                parallax: preloadedParallax,
+                bonus: preloadedBonus
+            };
+        },
+
+        /**
+         * Dynamically swap the theme assets mid-run without resetting momentum or entities.
+         */
+        triggerIdentityCrisis: function () {
+            if (!this.preloadedIdentity) {
+                this.preloadIdentityCrisis();
+            }
+
+            var identity = this.preloadedIdentity;
+            this.currentTheme = identity.themeKey;
+
+            // 1. Swap main sprite sheet
+            Runner.imageSprite = identity.sprite;
+
+            // 2. Swap parallax background & bonus asset
+            this.parallaxImage = identity.parallax;
+            this.bonusImage = identity.bonus;
+
+            // 3. Update theme stylesheet (background color & page styling)
+            var themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
+            var themeLink = document.getElementById('theme-stylesheet');
+            if (themeLink && themesObj && themesObj[this.currentTheme] && themesObj[this.currentTheme].css) {
+                themeLink.href = themesObj[this.currentTheme].css;
+            }
+
+            // 4. Update audio effects
+            if (Runner.isRandomTheme) {
+                this.initRandomTheme();
+            } else {
+                this.updateSoundFx();
+            }
+
+            // 5. Trigger intentional screen-tear reality glitch
+            this.clearGlitch();
+            this.activeGlitchClass = 'glitch-tear';
+            this.canvas.classList.add('glitch-tear');
+            this.glitchTimer = 320;
+
+            // 6. Activate Announcement Banner
+            this.identityCrisisThemeName = identity.themeTitle;
+            this.identityCrisisDisplayTimer = 3500;
+
+            // 7. Schedule next 1500-pt checkpoint
+            this.nextIdentityCrisisScore += 1500;
+            this.preloadedIdentity = null;
+        },
+
+        /**
+         * Render the "IDENTITY CRISIS" announcement banner at the top of the canvas.
+         */
+        drawIdentityCrisisBanner: function () {
+            var ctx = this.canvasCtx;
+            var width = this.dimensions.WIDTH;
+            var text = "IDENTITY CRISIS: " + this.identityCrisisThemeName.toUpperCase();
+
+            ctx.save();
+            ctx.font = 'bold 12px monospace';
+            var textMetrics = ctx.measureText(text);
+            var boxW = textMetrics.width + 24;
+            var boxH = 26;
+            var boxX = (width - boxW) / 2;
+            var boxY = 6;
+
+            // High-contrast neon glitch banner
+            ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.95)' : 'rgba(10, 10, 25, 0.92)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = this.inverted ? '#990022' : '#00ffff';
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            // Text
+            ctx.fillStyle = this.inverted ? '#990022' : '#ff0055';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, width / 2, boxY + (boxH / 2));
+            ctx.restore();
+        },
+
+        /**
+         * Recalculate T-Rex gravity and jump velocity based on the Dread Meter.
+         */
+        updateWeightOfBeing: function () {
+            if (!this.tRex) return;
+            var dreadRatio = this.dreadLevel / 100;
+
+            // Scale gravity up from 0.60 to 1.00 (making falls sharp and heavy)
+            this.tRex.config.GRAVITY = Trex.config.GRAVITY + (dreadRatio * 0.40);
+
+            // Slightly increase initial impulse so jumps remain snappy and clearable
+            this.tRex.config.INIITAL_JUMP_VELOCITY = Trex.config.INIITAL_JUMP_VELOCITY - (dreadRatio * 1.8);
+            this.tRex.config.DROP_VELOCITY = this.tRex.config.INIITAL_JUMP_VELOCITY / 2;
+        },
+
+        /**
+         * Render the "WEIGHT OF BEING" HUD bar at the top center of the screen.
+         */
+        drawWeightOfBeingHUD: function () {
+            var ctx = this.canvasCtx;
+            var width = this.dimensions.WIDTH;
+
+            var barW = 170;
+            var barH = 14;
+            var x = (width - barW) / 2;
+            // Shift down if the Identity Crisis banner is currently active
+            var y = (this.identityCrisisDisplayTimer > 0) ? 36 : 6;
+
+            ctx.save();
+
+            // Background container pill
+            ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.88)' : 'rgba(15, 15, 20, 0.85)';
+            ctx.fillRect(x, y, barW, barH);
+
+            // Border
+            ctx.strokeStyle = this.inverted ? '#333333' : 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, barW, barH);
+
+            // Fill gauge
+            var gaugeW = Math.round((barW - 4) * (this.dreadLevel / 100));
+            if (gaugeW > 0) {
+                // Color transitions: calm blue (low) -> amber (mid) -> existential red (high)
+                var gaugeColor = '#00e5ff';
+                if (this.dreadLevel > 70) {
+                    gaugeColor = '#ff1744';
+                } else if (this.dreadLevel > 35) {
+                    gaugeColor = '#ffb700';
+                }
+                ctx.fillStyle = gaugeColor;
+                ctx.fillRect(x + 2, y + 2, gaugeW, barH - 4);
+            }
+
+            // HUD label & percentage
+            ctx.font = 'bold 8px monospace';
+            ctx.fillStyle = (this.dreadLevel > 50 && !this.inverted) ? '#ffffff' : (this.inverted ? '#000000' : '#cccccc');
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('WEIGHT OF BEING ' + this.dreadLevel + '%', width / 2, y + (barH / 2));
+
+            ctx.restore();
+        },
     };
 
     /**
@@ -2387,7 +2848,6 @@
     
     Runner.themeImageCache = {};
     Runner.randomSpriteImages = {};
-    Runner.isRandomTheme = false;
     Runner.isRandomTheme = false;
     Runner.soundBufferCache = {};
     Runner.randomSoundThemes = {};
@@ -2719,17 +3179,23 @@
 
     /**
      * Check for a collision.
+     * Purely reports what would happen - it never mutates tRex or Runner
+     * state. In particular, a hit that a shield would absorb is reported
+     * back as the string 'shielded' rather than being consumed here;
+     * the caller (Runner.prototype.update) is responsible for actually
+     * clearing tRex.hasShield and starting the post-hit grace period.
      * @param {!Obstacle} obstacle
      * @param {!Trex} tRex T-rex object.
      * @param {HTMLCanvasContext} opt_canvasCtx Optional canvas context for drawing
      *    collision boxes.
-     * @return {Array<CollisionBox>}
+     * @return {Array<CollisionBox>|string|boolean} An [tRexBox, obstacleBox]
+     *    pair on a real crash, the string 'shielded' on a hit a shield
+     *    would absorb, or false when there is no collision.
      */
     function checkForCollision(obstacle, tRex, opt_canvasCtx) {
         if (!obstacle || !tRex) {
             return false;
         }
-        var obstacleBoxXPos = Runner.defaultDimensions.WIDTH + obstacle.xPos;
 
         // Adjustments are made to the bounding box as there is a 1 pixel white
         // border around the t-rex and obstacles.
@@ -2767,11 +3233,9 @@
                 return false;
             }
 
-            // Shield check & grace period
+            // A shield, or its post-hit grace period, would absorb this hit.
             if (tRex.hasShield) {
-                tRex.hasShield = false;
-                Runner.instance_.shieldInvulnerableTimer = 500; // 500ms grace period to pass through obstacle
-                return false; // Absorb hit
+                return 'shielded';
             }
             if (Runner.instance_ && Runner.instance_.shieldInvulnerableTimer > 0) {
                 return false;
@@ -4015,10 +4479,19 @@
 
         /**
          * Reset the distance meter back to '00000'.
+         * @param {number=} opt_highScoreDistance Pixel distance of the
+         *     current high score. When given (and non-zero), the high
+         *     score digits are (re)applied via setHighScore so the HUD
+         *     reflects it immediately after a restart, rather than
+         *     relying solely on whatever setHighScore call, if any,
+         *     happened to run during the previous game's gameOver().
          */
-        reset: function () {
+        reset: function (opt_highScoreDistance) {
             this.update(0);
             this.acheivement = false;
+            if (opt_highScoreDistance) {
+                this.setHighScore(opt_highScoreDistance);
+            }
         }
     };
 
@@ -4236,20 +4709,19 @@
         },
 
         draw: function () {
-            var moonSourceWidth = this.currentPhase == 3 ? NightMode.config.WIDTH * 2 :
+            // moonOutputWidth stays at 1x (it's the on-screen render size);
+            // everything else is a source-rect coordinate into the 2x/HDPI
+            // spritesheet, so it's computed once directly at that scale
+            // rather than at 1x and then immediately doubled/overwritten.
+            var moonBaseWidth = this.currentPhase == 3 ? NightMode.config.WIDTH * 2 :
                 NightMode.config.WIDTH;
-            var moonSourceHeight = NightMode.config.HEIGHT;
-            var moonSourceX = this.spritePos.x + NightMode.phases[this.currentPhase];
-            var moonOutputWidth = moonSourceWidth;
-            var starSize = NightMode.config.STAR_SIZE;
-            var starSourceX = Runner.spriteDefinition.LDPI.STAR.x;
-
-            moonSourceWidth *= 2;
-            moonSourceHeight *= 2;
-            moonSourceX = this.spritePos.x +
+            var moonOutputWidth = moonBaseWidth;
+            var moonSourceWidth = moonBaseWidth * 2;
+            var moonSourceHeight = NightMode.config.HEIGHT * 2;
+            var moonSourceX = this.spritePos.x +
                 (NightMode.phases[this.currentPhase] * 2);
-            starSize *= 2;
-            starSourceX = Runner.spriteDefinition.HDPI.STAR.x;
+            var starSize = NightMode.config.STAR_SIZE * 2;
+            var starSourceX = Runner.spriteDefinition.HDPI.STAR.x;
 
             this.canvasCtx.save();
             this.canvasCtx.globalAlpha = this.opacity;
