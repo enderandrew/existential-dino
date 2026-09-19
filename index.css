@@ -9,6 +9,66 @@ html, body {
   height: 100%;
 }
 
+.center {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 92%;
+  max-width: 600px;
+  z-index: 10; /* Sits above .controller (z-index: 1) */
+  pointer-events: auto;
+}
+
+ul {
+  list-style-type: none;
+  margin: 0;
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto; /* Allows smooth horizontal scrolling on mobile */
+  -webkit-overflow-scrolling: touch;
+  background-color: rgba(35, 35, 35, 0.9);
+  border-radius: 28px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  gap: 6px;
+}
+
+/* Hide scrollbar for a clean native look */
+ul::-webkit-scrollbar {
+  display: none;
+}
+ul {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+li {
+  flex: 0 0 auto;
+}
+
+li a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  min-width: 44px;  /* Meets mobile touch-target guidelines */
+  min-height: 44px;
+  border-radius: 50%;
+  transition: background-color 0.2s ease;
+}
+
+li a:hover, li a:active {
+  background-color: #444;
+}
+
+li a img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
 .icon {
   -webkit-user-select: none;
   user-select: none;
@@ -38,7 +98,7 @@ html, body {
 }
 
 .offline .runner-container {
-  height: 150px;
+  height: 250px;
   max-width: 600px;
   overflow: hidden;
   position: absolute;
@@ -47,7 +107,7 @@ html, body {
 }
 
 .offline .runner-canvas {
-  height: 150px;
+  height: 250px;
   max-width: 600px;
   opacity: 1;
   overflow: hidden;
@@ -162,4 +222,397 @@ html, body {
   transform-origin: top center;
   transition: transform 250ms cubic-bezier(0.4, 0, 1, 1) 400ms;
   z-index: 2;
+}
+
+footer {
+  margin-top: auto;
+  text-align: center;
+}
+
+footer.footer {
+  position: fixed !important;
+  left: 50% !important;
+  bottom: 24px !important;
+  transform: translateX(-50%) !important;
+  width: min(94vw, 860px) !important;
+  max-width: 94vw !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 1000 !important;
+  pointer-events: auto !important;
+  box-sizing: border-box !important;
+}
+
+/* 2-row wrap on smaller displays, 1 row on ultrawide, with smooth scrolling fallback */
+#theme-selector {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 10px 14px !important;
+  margin: 0 auto !important;
+  list-style: none !important;
+  background: rgba(30, 30, 30, 0.75) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+  max-height: 120px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Custom thin scrollbar if overflow occurs */
+#theme-selector::-webkit-scrollbar {
+  width: 4px;
+}
+#theme-selector::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+}
+
+#theme-selector li {
+  display: inline-flex !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  flex: 0 0 auto !important;
+}
+
+#theme-selector a {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 50% !important;
+  padding: 2px !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+  text-decoration: none !important;
+}
+
+#theme-selector a:hover {
+  transform: scale(1.18) !important;
+  z-index: 2 !important;
+}
+
+#theme-selector img {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  display: block !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Highlight ring for currently active theme */
+#theme-selector li.active-theme a {
+  outline: 2px solid #58a6ff !important;
+  outline-offset: 2px !important;
+  transform: scale(1.08) !important;
+}
+
+.game-title {
+  font-family: monospace, sans-serif;
+  position: relative;
+  text-align: center;
+  z-index:99;
+}
+
+@media (hover: none) {
+  #messageBox {
+    display: none;
+  }
+}
+
+
+/* ==========================================================
+   Mobile Theme Button & Modal Styles
+   ========================================================== */
+
+/* Hidden on desktop by default */
+.theme-modal-btn {
+  display: none;
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  background: rgba(30, 30, 30, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  z-index: 1000;
+  pointer-events: auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.theme-modal-btn:active {
+  transform: translateX(-50%) scale(0.95);
+  background: rgba(50, 50, 50, 0.95);
+}
+
+/* Modal Overlay & Backdrop */
+.theme-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.theme-modal.hidden {
+  display: none !important;
+}
+
+.theme-modal-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Modal Content Card */
+.theme-modal-dialog {
+  position: relative;
+  width: 90vw;
+  max-width: 440px;
+  max-height: 82vh;
+  background: #1e1e24;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 2001;
+}
+
+.theme-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.theme-modal-title {
+  margin: 0;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.theme-modal-close {
+  background: transparent;
+  border: none;
+  color: #aaa;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.theme-modal-close:hover,
+.theme-modal-close:active {
+  color: #fff;
+}
+
+/* Grid Layout Inside the Modal */
+.modal-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  margin: 0;
+  list-style: none;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.modal-theme-grid li {
+  display: flex;
+  justify-content: center;
+}
+
+.modal-theme-grid a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-decoration: none;
+  color: #ddd;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 11px;
+  text-align: center;
+  gap: 6px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  width: 100%;
+  transition: background 0.15s ease;
+}
+
+.modal-theme-grid a:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.modal-theme-grid img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.modal-theme-grid li.active-theme a img {
+  border-color: #58a6ff;
+  box-shadow: 0 0 10px rgba(88, 166, 255, 0.6);
+}
+
+.modal-theme-grid li.active-theme .modal-theme-label {
+  color: #58a6ff;
+  font-weight: 700;
+}
+
+.modal-theme-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
+
+/* ==========================================================
+   Responsive Breakpoints: Hide Footer / Show Modal Button
+   ========================================================== */
+@media (max-width: 768px), (max-height: 520px) {
+  /* Hide the crowded multi-theme footer bar */
+  footer.footer {
+    display: none !important;
+  }
+
+  /* Display the single compact trigger button */
+  .theme-modal-btn {
+    display: flex !important;
+  }
+}
+
+/* ==========================================================
+   Existential Reality-Glitch Effects
+   ========================================================== */
+
+/* 1. Chromatic Aberration / RGB Split */
+.runner-canvas.glitch-chromatic {
+  animation: glitch-chromatic-anim 0.25s steps(2, jump-none) infinite;
+}
+
+@keyframes glitch-chromatic-anim {
+  0% {
+    filter: drop-shadow(-3px 0 rgba(255, 0, 85, 0.75)) drop-shadow(3px 0 rgba(0, 240, 255, 0.75));
+    transform: translate(1px, -1px);
+  }
+  50% {
+    filter: drop-shadow(3px 0 rgba(255, 0, 85, 0.8)) drop-shadow(-3px 0 rgba(0, 255, 128, 0.8));
+    transform: translate(-2px, 1px);
+  }
+  100% {
+    filter: drop-shadow(-2px 1px rgba(255, 0, 85, 0.75)) drop-shadow(2px -1px rgba(0, 240, 255, 0.75));
+    transform: translate(0, 0);
+  }
+}
+
+/* 2. Horizontal Screen Tear / Scanline Slice */
+.runner-canvas.glitch-tear {
+  animation: glitch-tear-anim 0.28s linear infinite;
+}
+
+@keyframes glitch-tear-anim {
+  0% {
+    clip-path: polygon(0 0, 100% 0, 100% 28%, 0 28%, 0 34%, 100% 34%, 100% 68%, 0 68%, 0 74%, 100% 74%, 100% 100%, 0 100%);
+    transform: translate(-4px, 0);
+    filter: contrast(150%);
+  }
+  33% {
+    clip-path: polygon(0 0, 100% 0, 100% 48%, 0 48%, 0 54%, 100% 54%, 100% 82%, 0 82%, 0 88%, 100% 88%, 100% 100%, 0 100%);
+    transform: translate(3px, -1px);
+    filter: contrast(120%) brightness(1.25);
+  }
+  66% {
+    clip-path: polygon(0 0, 100% 0, 100% 12%, 0 12%, 0 18%, 100% 18%, 100% 58%, 0 58%, 0 63%, 100% 63%, 100% 100%, 0 100%);
+    transform: translate(-2px, 1px);
+    filter: invert(18%);
+  }
+  100% {
+    clip-path: none;
+    transform: none;
+    filter: none;
+  }
+}
+
+/* 3. VHS Analog Skew & Invert Pulse */
+.runner-canvas.glitch-vhs {
+  animation: glitch-vhs-anim 0.22s ease-in-out infinite;
+}
+
+@keyframes glitch-vhs-anim {
+  0% {
+    filter: contrast(170%) brightness(1.2) hue-rotate(45deg);
+    transform: skewX(-1.5deg) scaleY(1.02);
+  }
+  40% {
+    filter: invert(25%) contrast(190%) saturate(1.4);
+    transform: skewX(2deg) scaleX(0.99);
+  }
+  80% {
+    filter: contrast(130%) brightness(0.95) hue-rotate(-30deg);
+    transform: translate(-2px, 1px);
+  }
+  100% {
+    filter: none;
+    transform: none;
+  }
+}
+
+/* 4. Pixel Jitter & Contrast Shudder */
+.runner-canvas.glitch-shake {
+  animation: glitch-shake-anim 0.2s steps(4) infinite;
+}
+
+@keyframes glitch-shake-anim {
+  0% {
+    transform: translate(-3px, 2px);
+    filter: invert(12%) drop-shadow(2px -2px #ff00ff);
+  }
+  25% {
+    transform: translate(3px, -1px);
+    filter: drop-shadow(-2px 2px #00ffff);
+  }
+  50% {
+    transform: translate(-2px, -2px);
+    filter: contrast(170%);
+  }
+  75% {
+    transform: translate(2px, 1px);
+    filter: brightness(1.3);
+  }
+  100% {
+    transform: translate(0, 0);
+    filter: none;
+  }
 }

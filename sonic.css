@@ -1,0 +1,17 @@
+/* Copyright 2013 The Chromium Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file. */
+
+html, body {
+  color: #fff;
+  background-color: #6b8cff;
+}
+
+.icon-offline {
+  content: -webkit-image-set( url(assets/sonic_100_percent/100-error-offline.png) 1x, url(assets/sonic_200_percent/200-error-offline.png) 2x);
+  position: relative;
+}
+
+.offline .interstitial-wrapper {
+  color: #ffa542;
+}
