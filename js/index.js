@@ -1261,7 +1261,7 @@
                     for (var b = this.horizon.obstacles.length - 1; b >= 0; b--) {
                         var targetObs = this.horizon.obstacles[b];
                         if (!targetObs || !targetObs.typeConfig) continue;
-                        if (targetObs.typeConfig.type === 'GAP' || targetObs.typeConfig.type === 'PLATFORM_GAP' || targetObs.typeConfig.type === 'ICE') {
+                        if (targetObs.typeConfig.type === 'GAP' || targetObs.typeConfig.type === 'PLATFORM_GAP' || targetObs.typeConfig.type === 'COLLAPSING_PLATFORM' || targetObs.typeConfig.type === 'ICE') {
                             continue;
                         }
                         // Target obstacles ahead of T-Rex within blast range
@@ -1338,17 +1338,35 @@
                         if (playerFootX >= obs.xPos + 6 && playerFootX <= obs.xPos + obs.width - 6) {
                             isOverWater = true;
                         }
-                    } else if (obs.typeConfig.type === 'PLATFORM_GAP') {
+                    } else if (obs.typeConfig.type === 'PLATFORM_GAP' || obs.typeConfig.type === 'COLLAPSING_PLATFORM') {
                         var pLeft = obs.xPos + obs.typeConfig.platOffset;
                         var pRight = pLeft + obs.typeConfig.platWidth;
 
                         if (playerFootX >= obs.xPos + 6 && playerFootX < pLeft) {
                             isOverWater = true;
                         } else if (playerFootX >= pLeft && playerFootX <= pRight) {
-                            // Elevated island grass surface
-                            var platSurfaceY = 227 - obs.typeConfig.platHeight;
-                            targetGroundY = platSurfaceY - (227 - this.tRex.defaultGroundY);
-                            inPit = false;
+                            if (obs.typeConfig.type === 'COLLAPSING_PLATFORM') {
+                                // Trigger collapse once the runner lands or touches down
+                                if (obs.collapseState === 'IDLE' && (!this.tRex.jumping || this.tRex.yPos >= (227 - obs.typeConfig.platHeight - (227 - this.tRex.defaultGroundY) - 5))) {
+                                    obs.collapseState = 'WARNING';
+                                }
+
+                                // If the platform has broken and dropped, drop the player into the water pit
+                                if (obs.collapseState === 'FALLING' && obs.collapseDropY > 12) {
+                                    targetGroundY = 999;
+                                    isOverWater = true;
+                                    inPit = true;
+                                } else {
+                                    var platSurfaceY = (227 - obs.typeConfig.platHeight) + obs.collapseDropY;
+                                    targetGroundY = platSurfaceY - (227 - this.tRex.defaultGroundY);
+                                    inPit = false;
+                                }
+                            } else {
+                                // Standard stable island
+                                var platSurfaceY = 227 - obs.typeConfig.platHeight;
+                                targetGroundY = platSurfaceY - (227 - this.tRex.defaultGroundY);
+                                inPit = false;
+                            }
                             break;
                         } else if (playerFootX > pRight && playerFootX <= obs.xPos + obs.width - 6) {
                             isOverWater = true;
@@ -2773,11 +2791,16 @@
             if (!this.tRex) return;
             var dreadRatio = this.dreadLevel / 100;
 
-            // Scale gravity up from 0.60 to 1.00 (making falls sharp and heavy)
-            this.tRex.config.GRAVITY = Trex.config.GRAVITY + (dreadRatio * 0.40);
+            // Scale gravity up from 0.60 to 1.00 (making falls sharp and heavy).
+            // Scaled from Trex.baseConfig (a fixed snapshot), not from
+            // Trex.config/this.tRex.config - those are the same shared,
+            // mutable object, so computing from it here would compound a
+            // little further on every call instead of always landing on
+            // the value that matches the *current* dread level.
+            this.tRex.config.GRAVITY = Trex.baseConfig.GRAVITY + (dreadRatio * 0.40);
 
             // Slightly increase initial impulse so jumps remain snappy and clearable
-            this.tRex.config.INIITAL_JUMP_VELOCITY = Trex.config.INIITAL_JUMP_VELOCITY - (dreadRatio * 1.8);
+            this.tRex.config.INIITAL_JUMP_VELOCITY = Trex.baseConfig.INIITAL_JUMP_VELOCITY - (dreadRatio * 1.8);
             this.tRex.config.DROP_VELOCITY = this.tRex.config.INIITAL_JUMP_VELOCITY / 2;
         },
 
@@ -3222,7 +3245,7 @@
         }
 
         // Ignore collision checks for non-lethal terrain gaps, platforms, or ice
-        if (obstacle.typeConfig.type === 'GAP' || obstacle.typeConfig.type === 'PLATFORM_GAP' || obstacle.typeConfig.type === 'ICE') {
+        if (obstacle.typeConfig.type === 'GAP' || obstacle.typeConfig.type === 'PLATFORM_GAP' || obstacle.typeConfig.type === 'COLLAPSING_PLATFORM' || obstacle.typeConfig.type === 'ICE') {
             return false;
         }
 
@@ -3418,6 +3441,12 @@
         this.gap = 0;
         this.speedOffset = 0;
 
+        // Collapsing platform state
+        this.collapseState = 'IDLE'; // 'IDLE' -> 'WARNING' -> 'FALLING'
+        this.collapseTimer = 0;
+        this.collapseDropY = 0;
+        this.collapseShakeX = 0;
+
         // For animated obstacles.
         this.currentFrame = 0;
         this.timer = 0;
@@ -3543,43 +3572,65 @@
                     return;
                 }
 
-                // Render large gap with elevated floating grass island
-                if (this.typeConfig.type === 'PLATFORM_GAP') {
-                    var pStart = this.xPos + this.typeConfig.platOffset;
+                // Render elevated grass islands (standard & collapsing variants)
+                if (this.typeConfig.type === 'PLATFORM_GAP' || this.typeConfig.type === 'COLLAPSING_PLATFORM') {
+                    var isCollapsing = (this.typeConfig.type === 'COLLAPSING_PLATFORM');
+                    var shake = isCollapsing ? this.collapseShakeX : 0;
+                    var dropY = isCollapsing ? this.collapseDropY : 0;
+
+                    var pStart = this.xPos + this.typeConfig.platOffset + shake;
                     var pWidth = this.typeConfig.platWidth;
                     var pEnd = pStart + pWidth;
                     var pHeight = this.typeConfig.platHeight;
-                    var pY = 227 - pHeight;
+                    var pY = (227 - pHeight) + dropY;
 
                     // Draw the water body across the entire gap
                     drawWater(this.canvasCtx, Runner.waterImage, this.xPos, 227, this.width, 23);
 
-                    // Floating island underbelly (dirt slab below grass)
-                    this.canvasCtx.fillStyle = '#3a3a3a';
-                    this.canvasCtx.fillRect(pStart + 1, pY + 10, pWidth - 2, 8);
-                    this.canvasCtx.fillStyle = '#262626';
-                    this.canvasCtx.fillRect(pStart + 4, pY + 18, pWidth - 8, 4);
+                    // If platform has plunged completely below the canvas, skip drawing the slab
+                    if (pY < this.dimensions.HEIGHT + 10) {
+                        // Floating island underbelly (dirt slab)
+                        this.canvasCtx.fillStyle = isCollapsing ? '#2e261f' : '#3a3a3a';
+                        this.canvasCtx.fillRect(pStart + 1, pY + 10, pWidth - 2, 8);
+                        this.canvasCtx.fillStyle = isCollapsing ? '#1f1914' : '#262626';
+                        this.canvasCtx.fillRect(pStart + 4, pY + 18, pWidth - 8, 4);
 
-                    // Island rock side trims
-                    this.canvasCtx.fillStyle = '#535353';
-                    this.canvasCtx.fillRect(pStart, pY + 4, 2, 12);
-                    this.canvasCtx.fillRect(pEnd - 2, pY + 4, 2, 12);
+                        // Island rock side trims
+                        this.canvasCtx.fillStyle = '#535353';
+                        this.canvasCtx.fillRect(pStart, pY + 4, 2, 12);
+                        this.canvasCtx.fillRect(pEnd - 2, pY + 4, 2, 12);
 
-                    // Sample and draw themed grass texture from sprite sheet
-                    var spriteHorizon = Runner.spriteDefinition.HDPI.HORIZON;
-                    var scale = 2;
-                    var sourceX = spriteHorizon.x + (40 * scale);
-                    var sourceY = spriteHorizon.y;
-                    var sourceW = pWidth * scale;
-                    var sourceH = 14 * scale;
+                        // Sample and draw themed grass texture from sprite sheet
+                        var spriteHorizon = IS_HIDPI ? Runner.spriteDefinition.HDPI.HORIZON : Runner.spriteDefinition.LDPI.HORIZON;
+                        var scale = IS_HIDPI ? 2 : 1;
+                        var sourceX = spriteHorizon.x + (40 * scale);
+                        var sourceY = spriteHorizon.y;
+                        var sourceW = pWidth * scale;
+                        var sourceH = 14 * scale;
 
-                    this.canvasCtx.drawImage(
-                        Runner.getSpriteImage('HORIZON'),
-                        sourceX, sourceY,
-                        sourceW, sourceH,
-                        pStart, pY,
-                        pWidth, 14
-                    );
+                        this.canvasCtx.drawImage(
+                            Runner.getSpriteImage('HORIZON'),
+                            sourceX, sourceY,
+                            sourceW, sourceH,
+                            pStart, pY,
+                            pWidth, 14
+                        );
+
+                        // Draw fissure stress cracks across the crumbling surface
+                        if (isCollapsing && this.collapseState === 'WARNING') {
+                            this.canvasCtx.save();
+                            this.canvasCtx.strokeStyle = 'rgba(255, 60, 40, 0.75)';
+                            this.canvasCtx.lineWidth = 1.5;
+                            this.canvasCtx.beginPath();
+                            for (var c = pStart + 25; c < pEnd - 15; c += 35) {
+                                this.canvasCtx.moveTo(c, pY + 2);
+                                this.canvasCtx.lineTo(c + 4, pY + 8);
+                                this.canvasCtx.lineTo(c + 1, pY + 13);
+                            }
+                            this.canvasCtx.stroke();
+                            this.canvasCtx.restore();
+                        }
+                    }
                     return;
                 }
 
@@ -3637,6 +3688,51 @@
              * @param {number} speed
              */
             update: function (deltaTime, speed) {
+                // Handle collapsing platform physics
+                if (this.typeConfig.type === 'COLLAPSING_PLATFORM') {
+                    if (this.collapseState === 'WARNING') {
+                        this.collapseTimer += deltaTime;
+                        // Rapid horizontal jitter
+                        this.collapseShakeX = (Math.random() - 0.5) * 4;
+
+                        // Spawn occasional crumble dust falling into the water
+                        if (window.Runner && Runner.instance_ && Math.random() < 0.35) {
+                            var dustX = this.xPos + this.typeConfig.platOffset + getRandomNum(10, this.typeConfig.platWidth - 10);
+                            var dustY = 227 - this.typeConfig.platHeight + 14;
+                            Runner.instance_.particles.push(new Particle(this.canvasCtx, dustX, dustY, {
+                                speed: 2,
+                                upward: -0.5,
+                                size: getRandomNum(2, 3),
+                                color: isMonochromeTheme() ? '#888888' : '#bfa76f',
+                                life: getRandomNum(250, 450)
+                            }));
+                        }
+
+                        // Trigger full collapse once warning duration expires
+                        if (this.collapseTimer >= this.typeConfig.collapseDelay) {
+                            this.collapseState = 'FALLING';
+                            this.collapseShakeX = 0;
+
+                            // Debris burst
+                            if (window.Runner && Runner.instance_) {
+                                var pCenter = this.xPos + this.typeConfig.platOffset + (this.typeConfig.platWidth / 2);
+                                for (var cp = 0; cp < 14; cp++) {
+                                    Runner.instance_.particles.push(new Particle(this.canvasCtx, pCenter + getRandomNum(-60, 60), 227 - this.typeConfig.platHeight + 10, {
+                                        speed: 4,
+                                        upward: 1,
+                                        size: getRandomNum(2, 4),
+                                        color: isMonochromeTheme() ? '#666666' : '#8d6e3f',
+                                        life: getRandomNum(300, 600)
+                                    }));
+                                }
+                            }
+                        }
+                    } else if (this.collapseState === 'FALLING') {
+                        // Accelerate downwards into the abyss
+                        this.collapseDropY += (deltaTime / 16) * 5.5;
+                    }
+                }
+
                 if (!this.remove) {
                     if (this.typeConfig.speedOffset) {
                         speed += this.speedOffset;
@@ -3798,6 +3894,20 @@
             minSpeed: 3,
             collisionBoxes: []   // Empty to prevent default crash logic
         },
+        {
+            type: 'COLLAPSING_PLATFORM',
+            width: 380,          // Total pit span across both gaps + platform
+            height: 50,
+            yPos: 195,
+            multipleSpeed: 999,
+            minGap: 240,
+            minSpeed: 4.5,
+            platOffset: 95,      // First gap: 95px wide
+            platWidth: 180,      // Extended runway (180px) for high-speed reaction
+            platHeight: 28,      // Elevation above ground
+            collapseDelay: 200,  // Milliseconds of trembling before dropping
+            collisionBoxes: []
+        },
     ];
 
 
@@ -3861,6 +3971,21 @@
         START_X_POS: 50,
         WIDTH: 44,
         WIDTH_DUCK: 59
+    };
+
+    /**
+     * Unmodified baseline jump physics, snapshotted once right here,
+     * before anything has a chance to mutate Trex.config. Time-varying
+     * effects (e.g. the Weight of Being dread meter, see
+     * Runner.prototype.updateWeightOfBeing) should scale from these
+     * fixed values rather than from Trex.config itself - Trex instances
+     * share that single object (see the Trex constructor), so reading
+     * and rewriting Trex.config in place would compound a little more
+     * on every call instead of always scaling from the same baseline.
+     */
+    Trex.baseConfig = {
+        GRAVITY: Trex.config.GRAVITY,
+        INIITAL_JUMP_VELOCITY: Trex.config.INIITAL_JUMP_VELOCITY
     };
 
 
