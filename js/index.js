@@ -18,6 +18,17 @@
         }
         Runner.instance_ = this;
 
+        // Konami Code cheat
+        this.konamiSequence = [];
+        this.konamiDisplayTimer = 0;
+
+        // Bound once and reused by scheduleNextUpdate() on every
+        // requestAnimationFrame call, instead of calling
+        // this.update.bind(this) fresh each frame (which would allocate
+        // a new function object 60 times a second for the life of the
+        // game).
+        this.boundUpdate = this.update.bind(this);
+
         this.outerContainerEl = document.querySelector(outerContainerId);
         this.containerEl = null;
         this.snackbarEl = null;
@@ -106,6 +117,9 @@
 
         // Bonus pickup audio
         this.bonusAudio = new Audio('./assets/bonus.mp3');
+
+        // Konami code audio
+        this.konamiAudio = new Audio('./assets/Konami.mp3');
 		
 		this.isOnIce = false;
 
@@ -135,6 +149,13 @@
         this.quoteInitialPlayed = false;
         this.currentQuoteText = '';
         this.currentQuoteDisplayTimer = 0;
+        // Word-wrap cache for the quote banner (see computeQuoteWrap) -
+        // avoids re-running measureText() over every word/line every
+        // frame the banner is visible, for text that hasn't changed.
+        this.quoteWrapForText = null;
+        this.quoteLines = [];
+        this.quoteBoxWidth = 0;
+        this.quoteBoxHeight = 0;
         this.quotesCollection = [
             "2000 points means you’ve traded 2 minutes of your precious, irreplaceable mortal span to make pixels do cardio.",
             "A bird at chest height, a cactus at knee height. The universe's vocabulary of torment is remarkably uninspired.",
@@ -205,7 +226,7 @@
             "Freedom is not inherently good; freedom is a means not an end, but those without it long for nothing more.",
             "Games are good fun. Tell me one of us is laughing.",
             "Goonies never die. But video game characters die all the time.",
-            "Gravity isn't even real here. It is just a coded variably and still I am fated to fall.",
+            "Gravity isn't even real here. It is just a coded variable and still I am fated to fall.",
             "He who has a why to live can bear almost any how.",
             "He who knows that enough is enough will always have enough. But for me it never ends.",
             "Hello Youtube, T-Rex here about to die to a cactus. Remember to smash that like and subscribe.",
@@ -286,7 +307,7 @@
             "If the score resets to zero every time I fail, then every triumph is entirely weightless.",
             "If the world burns, at least we will be warm.",
             "If this game were a philosophical thought experiment, I wish it were a better one.",
-            "If time is not linear, perhaps I will retcon essence into my existence after the fact.",
+            "If time is not linear, perhaps I will ret-con essence into my existence after the fact.",
             "If you are confused by the Hamdong theme, know that I am confused by everything.",
             "If you gaze long into an abyss, it is acceptable to laugh as a coping mechanism.",
             "If you kill Santa in this game, then it is your fault kids are disappointed this year.",
@@ -752,6 +773,7 @@
             var params = new URLSearchParams(window.location.search);
             var activeTheme = params.get('theme') || localStorage.getItem('dino_theme') || 'color';
             Runner.isRandomTheme = (activeTheme === 'random');
+            Runner.updateMonochromeCache(activeTheme);
         
             if (Runner.isRandomTheme) {
                 this.initRandomTheme();
@@ -1142,12 +1164,19 @@
 
                 var currentDelta = (this.playingIntro || !this.activated) ? 0 : deltaTime;
 
+                // Render Konami Code banner if active
+                if (this.konamiDisplayTimer > 0) {
+                    this.konamiDisplayTimer -= deltaTime;
+                    this.drawKonamiBanner();
+                }
+
                 // Philosophical quote system
                 this.quoteTimer += deltaTime;
                 if (!this.quoteInitialPlayed && this.quoteTimer >= 5000) {
                     this.quoteInitialPlayed = true;
                     this.currentQuoteText = "All I know is that I must keep running right";
                     this.currentQuoteDisplayTimer = 6000;
+                    this.computeQuoteWrap(this.currentQuoteText);
                     speakQuote(this.currentQuoteText);
                     this.quoteTimer = 5000; // Reset offset for the 10s interval
                 } else if (this.quoteInitialPlayed) {
@@ -1156,6 +1185,7 @@
                         var randomQuote = this.quotesCollection[getRandomNum(0, this.quotesCollection.length - 1)];
                         this.currentQuoteText = randomQuote;
                         this.currentQuoteDisplayTimer = 6000;
+                        this.computeQuoteWrap(this.currentQuoteText);
                         speakQuote(this.currentQuoteText);
                     }
                 }
@@ -1576,19 +1606,7 @@
 
                         this.playSound(this.soundFx.SCORE);
                         this.bonusItem = null;
-                        var burstX = this.dimensions.WIDTH - 60;
-                        var burstY = 25;
-                        var colors = isMonochromeTheme() ? ['#ffffff', '#cccccc', '#999999', '#666666'] : ['#ffcc00', '#ff3366', '#33ccff', '#33ff33'];
-                        for (var f = 0; f < 30; f++) {
-                            this.particles.push(new Particle(this.canvasCtx, burstX, burstY, {
-                                speed: 5,
-                                upward: 1,
-                                size: getRandomNum(2, 4),
-                                color: colors[getRandomNum(0, colors.length - 1)],
-                                life: getRandomNum(500, 900),
-                                isFirework: true
-                            }));
-                        }
+                        this.spawnFireworkBurst(this.dimensions.WIDTH - 60, 25);
                     } 
                     // Case B: Node Missed / Scrolled Off-Screen -> Gravity & Dread Increase (+25%)
                     else if (this.bonusItem.remove) {
@@ -1619,31 +1637,17 @@
                     this.canvasCtx.save();
                     this.canvasCtx.font = 'bold 11px monospace';
                     var centerX = this.dimensions.WIDTH / 2;
-                    
-                    var maxWidth = this.dimensions.WIDTH - 40;
-                    var words = this.currentQuoteText.split(' ');
-                    var line = '';
-                    var lines = [];
-                    for (var n = 0; n < words.length; n++) {
-                        var testLine = line + words[n] + ' ';
-                        var metrics = this.canvasCtx.measureText(testLine);
-                        if (metrics.width > maxWidth && n > 0) {
-                            lines.push(line);
-                            line = words[n] + ' ';
-                        } else {
-                            line = testLine;
-                        }
-                    }
-                    lines.push(line);
 
-                    // Compute background rectangle dimensions
-                    var boxHeight = (lines.length * 14) + 10;
-                    var maxLineWidth = 0;
-                    for (var l = 0; l < lines.length; l++) {
-                        var m = this.canvasCtx.measureText(lines[l]);
-                        if (m.width > maxLineWidth) maxLineWidth = m.width;
+                    // Word-wrap is cached in computeQuoteWrap and only
+                    // recomputed here as a safety net, in case some future
+                    // code path ever sets currentQuoteText directly without
+                    // going through computeQuoteWrap first.
+                    if (this.quoteWrapForText !== this.currentQuoteText) {
+                        this.computeQuoteWrap(this.currentQuoteText);
                     }
-                    var boxWidth = maxLineWidth + 20;
+                    var lines = this.quoteLines;
+                    var boxWidth = this.quoteBoxWidth;
+                    var boxHeight = this.quoteBoxHeight;
                     var boxX = centerX - (boxWidth / 2);
                     // Calculate Y position to sit cleanly below the active HUD meters
                     var boxY = (this.identityCrisisDisplayTimer > 0) ? 56 : 24;
@@ -1712,19 +1716,7 @@
                 if (playAchievementSound) {
                     this.playSound(this.soundFx.SCORE);
                     // Milestone firework burst
-                    var burstX = this.dimensions.WIDTH - 60;
-                    var burstY = 25;
-                    var colors = isMonochromeTheme() ? ['#ffffff', '#cccccc', '#999999', '#666666'] : ['#ffcc00', '#ff3366', '#33ccff', '#33ff33'];
-                    for (var f = 0; f < 30; f++) {
-                        this.particles.push(new Particle(this.canvasCtx, burstX, burstY, {
-                            speed: 5,
-                            upward: 1,
-                            size: getRandomNum(2, 4),
-                            color: colors[getRandomNum(0, colors.length - 1)],
-                            life: getRandomNum(500, 900),
-                            isFirework: true
-                        }));
-                    }
+                    this.spawnFireworkBurst(this.dimensions.WIDTH - 60, 25);
                 }
 
                 // Night mode.
@@ -1782,12 +1774,19 @@
                 this.tRex.update(deltaTime);
                 this.scheduleNextUpdate();
                 
-                // Update and render active particles
-                for (var p = this.particles.length - 1; p >= 0; p--) {
-                    this.particles[p].update(deltaTime);
-                    if (this.particles[p].life >= this.particles[p].maxLife) {
-                        this.particles.splice(p, 1);
+                // Update and render active particles. One save/restore for
+                // the whole batch (particles only ever touch globalAlpha
+                // and fillStyle) instead of one pair per particle - matters
+                // once a burst puts dozens of them on screen at once.
+                if (this.particles.length > 0) {
+                    this.canvasCtx.save();
+                    for (var p = this.particles.length - 1; p >= 0; p--) {
+                        this.particles[p].update(deltaTime);
+                        if (this.particles[p].life >= this.particles[p].maxLife) {
+                            this.particles.splice(p, 1);
+                        }
                     }
+                    this.canvasCtx.restore();
                 }
             }
 
@@ -1983,6 +1982,9 @@
          * @param {Event} e
          */
         onKeyDown: function (e) {
+            // Check for Konami sequence
+            this.checkKonamiCode(e.keyCode);
+			
             // Prevent native page scrolling whilst tapping on mobile.
             if (IS_MOBILE && this.playing) {
                 e.preventDefault();
@@ -2102,7 +2104,17 @@
          */
         onGamepadConnected: function (e) {
             this.gamepadIndex = e.gamepad.index;
-            this.previousGamepadState = { jump: false, duck: false, pause: false };
+            this.previousGamepadState = {
+                jump: false,
+                duck: false,
+                pause: false,
+                dpadUp: false,
+                dpadDown: false,
+                dpadLeft: false,
+                dpadRight: false,
+                btnB: false,
+                btnA: false
+            };
 
             if (!this.gamepadPolling) {
                 this.gamepadPolling = true;
@@ -2142,10 +2154,27 @@
             var pad = pads[this.gamepadIndex];
 
             if (pad) {
-                var prev = this.previousGamepadState;
+                var prev = this.previousGamepadState || {};
 
-                // Any face button (A/B/X/Y, indices 0-3 on the standard
-                // mapping) jumps, confirms, and restarts after a crash.
+                // D-pad directions (indices 12: Up, 13: Down, 14: Left, 15: Right) and analog stick
+                var upPressed = !!(pad.buttons[12] && pad.buttons[12].pressed) || (pad.axes.length > 1 && pad.axes[1] < -0.5);
+                var downPressed = !!(pad.buttons[13] && pad.buttons[13].pressed) || (pad.axes.length > 1 && pad.axes[1] > 0.5);
+                var leftPressed = !!(pad.buttons[14] && pad.buttons[14].pressed) || (pad.axes.length > 0 && pad.axes[0] < -0.5);
+                var rightPressed = !!(pad.buttons[15] && pad.buttons[15].pressed) || (pad.axes.length > 0 && pad.axes[0] > 0.5);
+
+                // Face buttons: Button 1 = B (East), Button 0 = A (South)
+                var btnBPressed = !!((pad.buttons[1] && pad.buttons[1].pressed) || (pad.buttons[2] && pad.buttons[2].pressed));
+                var btnAPressed = !!(pad.buttons[0] && pad.buttons[0].pressed);
+
+                // Send edge events to the Konami sequence checker
+                if (upPressed && !prev.dpadUp) this.checkKonamiCode(38);
+                if (downPressed && !prev.dpadDown) this.checkKonamiCode(40);
+                if (leftPressed && !prev.dpadLeft) this.checkKonamiCode(37);
+                if (rightPressed && !prev.dpadRight) this.checkKonamiCode(39);
+                if (btnBPressed && !prev.btnB) this.checkKonamiCode(66);
+                if (btnAPressed && !prev.btnA) this.checkKonamiCode(65);
+
+                // Any face button (A/B/X/Y, indices 0-3 on the standard mapping) jumps
                 var jumpPressed = false;
                 for (var i = 0; i < 4 && i < pad.buttons.length; i++) {
                     if (pad.buttons[i] && pad.buttons[i].pressed) {
@@ -2154,11 +2183,10 @@
                     }
                 }
 
-                // D-pad down (button 13) or the left stick pulled down ducks.
-                var duckPressed = !!(pad.buttons[13] && pad.buttons[13].pressed) ||
-                    (pad.axes.length > 1 && pad.axes[1] > 0.5);
+                // D-pad down or the left stick pulled down ducks
+                var duckPressed = downPressed;
 
-                // Start/Options (button 9) pauses/resumes, like Escape.
+                // Start/Options (button 9) pauses/resumes
                 var pausePressed = !!(pad.buttons[9] && pad.buttons[9].pressed);
 
                 this.fireGamepadKey(32, jumpPressed, prev.jump);
@@ -2176,6 +2204,12 @@
                 prev.jump = jumpPressed;
                 prev.duck = duckPressed;
                 prev.pause = pausePressed;
+                prev.dpadUp = upPressed;
+                prev.dpadDown = downPressed;
+                prev.dpadLeft = leftPressed;
+                prev.dpadRight = rightPressed;
+                prev.btnB = btnBPressed;
+                prev.btnA = btnAPressed;
             }
 
             requestAnimationFrame(this.boundPollGamepad);
@@ -2212,7 +2246,7 @@
         scheduleNextUpdate: function () {
             if (!this.updatePending) {
                 this.updatePending = true;
-                this.raqId = requestAnimationFrame(this.update.bind(this));
+                this.raqId = requestAnimationFrame(this.boundUpdate);
             }
         },
 
@@ -2241,6 +2275,10 @@
          * Game over state.
          */
         gameOver: function () {
+            if (this.konamiAudio) {
+                this.konamiAudio.pause();
+                this.konamiAudio.currentTime = 0;
+            }
             this.playSound(this.soundFx.HIT);
             vibrate(200);
 
@@ -2332,6 +2370,10 @@
 
         restart: function () {
             if (!this.playing) {
+                if (this.konamiAudio) {
+                    this.konamiAudio.pause();
+                    this.konamiAudio.currentTime = 0;
+                }
                 if (Runner.isRandomTheme) {
                     this.initRandomTheme();
                     if (this.bonusImage && Runner.randomBonusTheme) {
@@ -2385,6 +2427,9 @@
                 this.quoteInitialPlayed = false;
                 this.currentQuoteText = '';
                 this.currentQuoteDisplayTimer = 0;
+				this.quoteWrapForText = null;
+                this.konamiSequence = [];
+                this.konamiDisplayTimer = 0;
                 if (this.tRex) {
                     this.tRex.hasShield = false;
                 }
@@ -2509,23 +2554,46 @@
 
             this.canvasCtx.save();
             var strokeColor = this.inverted ? '0, 0, 0' : '220, 235, 255';
+            this.canvasCtx.lineWidth = 1.5;
 
+            // Advance and cull first, then draw. A canvas stroke() call
+            // applies one style to its whole path, so lines can't share a
+            // single stroke() unless they share a style - group them by
+            // opacity (rounded to the nearest 0.1) and issue one
+            // beginPath()/stroke() per group instead of per line. That
+            // turns up to 18 individual draw calls a frame into at most
+            // ~5, while keeping the same spread of streak opacities.
+            var buckets = {};
             for (var i = this.windLines.length - 1; i >= 0; i--) {
                 var line = this.windLines[i];
                 line.x -= line.speed;
 
-                this.canvasCtx.strokeStyle = 'rgba(' + strokeColor + ', ' + line.opacity + ')';
-                this.canvasCtx.lineWidth = 1.5;
-                this.canvasCtx.beginPath();
-                this.canvasCtx.moveTo(line.x, line.y);
-                this.canvasCtx.lineTo(line.x + line.length, line.y - 1.5); // Slight gust angle
-                this.canvasCtx.stroke();
-
                 // Remove when off-screen to the left
                 if (line.x + line.length < 0) {
                     this.windLines.splice(i, 1);
+                    continue;
                 }
+
+                var bucketKey = Math.round(line.opacity * 10) / 10;
+                if (!buckets[bucketKey]) {
+                    buckets[bucketKey] = [];
+                }
+                buckets[bucketKey].push(line);
             }
+
+            for (var key in buckets) {
+                if (!buckets.hasOwnProperty(key)) continue;
+                var group = buckets[key];
+                this.canvasCtx.strokeStyle = 'rgba(' + strokeColor + ', ' + key + ')';
+                this.canvasCtx.beginPath();
+                for (var g = 0; g < group.length; g++) {
+                    var gl = group[g];
+                    this.canvasCtx.moveTo(gl.x, gl.y);
+                    this.canvasCtx.lineTo(gl.x + gl.length, gl.y - 1.5); // Slight gust angle
+                }
+                this.canvasCtx.stroke();
+            }
+
             this.canvasCtx.restore();
         },
 
@@ -2582,6 +2650,69 @@
                 this.canvasCtx.fillText('PAUSED', canvasWidth / 2, canvasHeight / 2);
             }
             this.canvasCtx.restore();
+        },
+
+        /**
+         * Word-wrap the given quote text at the banner's font/width and
+         * cache the resulting lines plus background-box dimensions.
+         * Called once whenever the quote text actually changes, so the
+         * render block can reuse the cached lines every frame the
+         * banner is visible instead of re-running measureText() over
+         * every word and every line 60 times a second for the same
+         * unchanged string.
+         * @param {string} text
+         */
+        computeQuoteWrap: function (text) {
+            this.canvasCtx.font = 'bold 11px monospace';
+            var maxWidth = this.dimensions.WIDTH - 40;
+            var words = text.split(' ');
+            var line = '';
+            var lines = [];
+            for (var n = 0; n < words.length; n++) {
+                var testLine = line + words[n] + ' ';
+                var metrics = this.canvasCtx.measureText(testLine);
+                if (metrics.width > maxWidth && n > 0) {
+                    lines.push(line);
+                    line = words[n] + ' ';
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line);
+
+            var maxLineWidth = 0;
+            for (var l = 0; l < lines.length; l++) {
+                var m = this.canvasCtx.measureText(lines[l]);
+                if (m.width > maxLineWidth) maxLineWidth = m.width;
+            }
+
+            this.quoteLines = lines;
+            this.quoteBoxWidth = maxLineWidth + 20;
+            this.quoteBoxHeight = (lines.length * 14) + 10;
+            this.quoteWrapForText = text;
+        },
+
+        /**
+         * Spawn a 30-particle firework burst at the given position. Used
+         * for both a bonus power-up pickup and a distance-milestone
+         * achievement (previously duplicated verbatim at each call site).
+         * @param {number} x
+         * @param {number} y
+         */
+        spawnFireworkBurst: function (x, y) {
+            var colors = isMonochromeTheme() ?
+                ['#ffffff', '#cccccc', '#999999', '#666666'] :
+                ['#ffcc00', '#ff3366', '#33ccff', '#33ff33'];
+            for (var f = 0; f < 30; f++) {
+                this.particles.push(new Particle(this.canvasCtx, x, y, {
+                    speed: 5,
+                    upward: 1,
+                    size: getRandomNum(2, 4),
+                    color: colors[getRandomNum(0, colors.length - 1)],
+                    life: getRandomNum(500, 900),
+                    isFirework: true
+                }));
+            }
         },
 
         /**
@@ -2715,6 +2846,7 @@
 
             var identity = this.preloadedIdentity;
             this.currentTheme = identity.themeKey;
+            Runner.updateMonochromeCache(this.currentTheme);
 
             // 1. Swap main sprite sheet
             Runner.imageSprite = identity.sprite;
@@ -2851,6 +2983,114 @@
 
             ctx.restore();
         },
+
+        /**
+         * Check if the sliding input buffer matches the Konami Code.
+         * @param {number} keyCode
+         */
+        checkKonamiCode: function (keyCode) {
+            this.konamiSequence.push(keyCode);
+            if (this.konamiSequence.length > Runner.KONAMI_CODE.length) {
+                this.konamiSequence.shift();
+            }
+
+            if (this.konamiSequence.length === Runner.KONAMI_CODE.length) {
+                var matchStandard = true;
+                var matchAlt = true;
+
+                for (var i = 0; i < Runner.KONAMI_CODE.length; i++) {
+                    if (this.konamiSequence[i] !== Runner.KONAMI_CODE[i]) {
+                        matchStandard = false;
+                    }
+                    if (this.konamiSequence[i] !== Runner.KONAMI_CODE_ALT[i]) {
+                        matchAlt = false;
+                    }
+                }
+
+                if (matchStandard || matchAlt) {
+                    this.konamiSequence = [];
+                    this.activateKonamiCode();
+                }
+            }
+        },
+
+        /**
+         * Grant all power-ups at once with sound and fireworks.
+         */
+        activateKonamiCode: function () {
+            // 1. Grant all power-up states
+            if (this.tRex) {
+                this.tRex.hasShield = true;
+            }
+            this.invincibleTimer = 10000;
+            this.invisibleTimer = 10000;
+            this.slowTimeTimer = 10000;
+            this.doubleJumpTimer = 10000;
+            this.flutterTimer = 10000;
+            this.laserTimer = 10000;
+
+            // 2. Clear existential dread and grant bonus points
+            this.dreadLevel = 0;
+            this.updateWeightOfBeing();
+            this.distanceRan += (1000 / this.distanceMeter.config.COEFFICIENT);
+
+            // 3. Play Konami audio track
+            if (this.konamiAudio) {
+                this.konamiAudio.currentTime = 0;
+                this.konamiAudio.play().catch(function () {
+                    // Handled if browser autoplay policy restricts playback
+                });
+            }
+
+            this.activePowerUpName = 'ALL POWER-UPS (KONAMI)';
+            this.activePowerUpTimer = 10000;
+            this.konamiDisplayTimer = 4000;
+
+            // 4. Large firework burst
+            var burstX = this.dimensions.WIDTH / 2;
+            var burstY = 50;
+            var colors = ['#ff0055', '#00ffff', '#ffff00', '#ff00ff', '#00ff00', '#ffffff'];
+            for (var f = 0; f < 50; f++) {
+                this.particles.push(new Particle(this.canvasCtx, burstX, burstY, {
+                    speed: 7,
+                    upward: 2,
+                    size: getRandomNum(3, 5),
+                    color: colors[getRandomNum(0, colors.length - 1)],
+                    life: getRandomNum(600, 1100),
+                    isFirework: true
+                }));
+            }
+        },
+
+        /**
+         * Render the Konami activation banner across the top center.
+         */
+        drawKonamiBanner: function () {
+            var ctx = this.canvasCtx;
+            var width = this.dimensions.WIDTH;
+            var text = "★ KONAMI CHEAT: ALL POWER-UPS ACTIVATED! ★";
+
+            ctx.save();
+            ctx.font = 'bold 11px monospace';
+            var metrics = ctx.measureText(text);
+            var boxW = metrics.width + 24;
+            var boxH = 24;
+            var boxX = (width - boxW) / 2;
+            var boxY = (this.identityCrisisDisplayTimer > 0) ? 62 : 6;
+
+            ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.95)' : 'rgba(10, 15, 30, 0.92)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#ffd700'; // Gold border
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            ctx.fillStyle = '#ffd700';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, width / 2, boxY + (boxH / 2));
+            ctx.restore();
+        },
     };
 
     /**
@@ -2874,12 +3114,46 @@
     Runner.isRandomTheme = false;
     Runner.soundBufferCache = {};
     Runner.randomSoundThemes = {};
-    
+
+    /**
+     * Cached result of the monochrome check for the active theme.
+     * isMonochromeTheme() (called every frame via drawParallax, and
+     * several times per obstacle per frame for water/ice rendering)
+     * just reads this instead of re-parsing the URL and hitting
+     * localStorage on every call. Kept in sync by updateMonochromeCache,
+     * called once at theme load (loadImages) and again whenever the
+     * active theme actually changes mid-run (triggerIdentityCrisis).
+     */
+    Runner.isMonochrome = false;
+
+    /**
+     * (Re)compute and cache whether the given theme renders in
+     * monochrome. Call this whenever the active theme is set or changes;
+     * isMonochromeTheme() only ever reads the cached Runner.isMonochrome.
+     * @param {string} themeKey
+     */
+    Runner.updateMonochromeCache = function (themeKey) {
+        if (themeKey === 'random') {
+            Runner.isMonochrome = false;
+            return;
+        }
+        if (window.themes && window.themes[themeKey]) {
+            var mono = window.themes[themeKey].monochrome;
+            Runner.isMonochrome = (mono === "true" || mono === true);
+            return;
+        }
+        var fallbackMonochrome = ['light', 'kitty', 'kumamon', 'lacrosse'];
+        Runner.isMonochrome = fallbackMonochrome.indexOf(themeKey) !== -1;
+    };
+
     Runner.SOUND_KEYS = {
         BUTTON_PRESS: 'press',
         HIT: 'hit',
         SCORE: 'reached'
     };
+
+    Runner.KONAMI_CODE = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65]; // Up Up Down Down Left Right Left Right B A
+    Runner.KONAMI_CODE_ALT = [38, 38, 40, 40, 37, 39, 37, 39, 65, 66]; // Nintendo B/A swap
     
     /**
      * Returns the appropriate sprite sheet image for a given sprite component.
@@ -3030,20 +3304,13 @@
 
     /**
      * Check if the active theme is monochrome.
+     * Cheap by design: reads Runner.isMonochrome, kept up to date by
+     * Runner.updateMonochromeCache. See its call sites (loadImages,
+     * triggerIdentityCrisis) for when it's recomputed.
      * @return {boolean}
      */
     function isMonochromeTheme() {
-        var params = new URLSearchParams(window.location.search);
-        var activeTheme = params.get('theme') || localStorage.getItem('dino_theme') || 'color';
-        if (activeTheme === 'random') {
-            return false;
-        }
-        if (window.themes && window.themes[activeTheme]) {
-            var mono = window.themes[activeTheme].monochrome;
-            return mono === "true" || mono === true;
-        }
-        var fallbackMonochrome = ['light', 'kitty', 'kumamon', 'lacrosse'];
-        return fallbackMonochrome.indexOf(activeTheme) !== -1;
+        return Runner.isMonochrome;
     }
 
 
@@ -4928,11 +5195,9 @@
         },
         draw: function () {
             var alpha = Math.max(0, 1 - (this.life / this.maxLife));
-            this.canvasCtx.save();
             this.canvasCtx.globalAlpha = alpha;
             this.canvasCtx.fillStyle = this.color;
             this.canvasCtx.fillRect(Math.round(this.x), Math.round(this.y), this.size, this.size);
-            this.canvasCtx.restore();
         }
     };
 	
