@@ -143,8 +143,7 @@
             this.preloadedIdentity = null;
             this.identityCrisisDisplayTimer = 0;
             this.identityCrisisThemeName = '';
-            const params = new URLSearchParams(window.location.search);
-            this.currentTheme = params.get('theme') || localStorage.getItem('dino_theme') || 'color';
+            this.currentTheme = Runner.getActiveTheme();
 
             // Weight of Being (Dread Meter)
             this.dreadLevel = 0; // 0 to 100%
@@ -611,8 +610,7 @@
             this.spriteDef = Runner.spriteDefinition.HDPI;
         
             // Check if random theme is active
-            const params = new URLSearchParams(window.location.search);
-            const activeTheme = params.get('theme') || localStorage.getItem('dino_theme') || 'color';
+            const activeTheme = Runner.getActiveTheme();
             Runner.isRandomTheme = (activeTheme === 'random');
             Runner.updateMonochromeCache(activeTheme);
         
@@ -674,8 +672,7 @@
             }
 	    
             const themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
-            const params = new URLSearchParams(window.location.search);
-            const activeTheme = params.get('theme') || localStorage.getItem('dino_theme') || 'color';
+            const activeTheme = Runner.getActiveTheme();
 	    
             for (const sound in Runner.sounds) {
                 let themeName = activeTheme;
@@ -838,7 +835,7 @@
         debounceResize() {
             if (!this.resizeTimerId_) {
                 this.resizeTimerId_ =
-                    setInterval(this.adjustDimensions.bind(this), 250);
+                    setTimeout(this.adjustDimensions.bind(this), 250);
             }
         }
 
@@ -846,7 +843,6 @@
          * Adjust game space dimensions on resize.
          */
         adjustDimensions() {
-            clearInterval(this.resizeTimerId_);
             this.resizeTimerId_ = null;
 
             const boxStyles = window.getComputedStyle(this.outerContainerEl);
@@ -1963,11 +1959,9 @@
 
             let spriteSrc = '';
             if (themeData) {
-                spriteSrc = IS_HIDPI ? themeData.sprite2x : themeData.sprite1x;
+                spriteSrc = themeData.sprite2x;
             } else {
-                spriteSrc = IS_HIDPI ?
-                    'assets/' + nextTheme + '_200_percent/200-offline-sprite.png' :
-                    'assets/' + nextTheme + '_100_percent/100-offline-sprite.png';
+                spriteSrc = 'assets/' + nextTheme + '_200_percent/200-offline-sprite.png';
             }
 
             const preloadedSprite = new Image();
@@ -3222,14 +3216,10 @@
      */
     const FPS = 60;
 
-    /** @const 
-    var IS_HIDPI = window.devicePixelRatio > 1;
-	
-	I am ripping out the HIDPI options because I don't want to maintain two sets of sprites for every theme.
-	HIDPI is the default.
-	
-	*/
-	const IS_HIDPI = true;
+    // HIDPI (2x) sprites are the only ones supported - there's no longer a
+    // conditional IS_HIDPI flag anywhere in the codebase to check, since
+    // maintaining two sets of sprites per theme wasn't worth it. See
+    // Runner.spriteDefinition below, which only defines an HDPI sheet.
 
     /** @const */
     const IS_IOS = /iPad|iPhone|iPod/.test(window.navigator.platform);
@@ -3301,22 +3291,12 @@
 
 
     /**
-     * Sprite definition layout of the spritesheet.
+     * Sprite definition layout of the spritesheet. LDPI (1x) coordinates
+     * were removed - IS_HIDPI is hardcoded true (see the note where it's
+     * defined), so only the HDPI (2x) sheet is ever used.
      * @enum {Object}
      */
     Runner.spriteDefinition = {
-        LDPI: {
-            CACTUS_LARGE: { x: 332, y: 2 },
-            CACTUS_SMALL: { x: 228, y: 2 },
-            CLOUD: { x: 86, y: 2 },
-            HORIZON: { x: 2, y: 54 },
-            MOON: { x: 484, y: 2 },
-            PTERODACTYL: { x: 134, y: 2 },
-            RESTART: { x: 2, y: 2 },
-            TEXT_SPRITE: { x: 655, y: 2 },
-            TREX: { x: 848, y: 2 },
-            STAR: { x: 645, y: 2 }
-        },
         HDPI: {
             CACTUS_LARGE: { x: 652, y: 2 },
             CACTUS_SMALL: { x: 446, y: 2 },
@@ -3397,6 +3377,42 @@
     Runner.isRandomTheme = false;
     Runner.soundBufferCache = {};
     Runner.randomSoundThemes = {};
+
+    /**
+     * Read the active theme key from the URL, falling back to the
+     * last-saved theme in localStorage, then to 'color'. This exact
+     * lookup used to be copy-pasted in the constructor, loadImages() and
+     * updateSoundFx().
+     *
+     * This mirrors getActiveThemeKey() in index.html, which resolves the
+     * same URL/localStorage inputs but runs earlier - before this script
+     * even loads, since it has to apply the theme's CSS/sprites/sounds
+     * before the game constructs - so the two can't literally share one
+     * function without restructuring script load order. Both validate
+     * the candidate key against THEMES before accepting it (an invalid
+     * ?theme= falls through to 'color' instead of silently propagating
+     * into asset paths downstream); keep them in sync if this changes.
+     * @return {string}
+     */
+    Runner.getActiveTheme = function () {
+        const themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
+        // 'random' is a magic value index.js itself recognizes
+        // (Runner.isRandomTheme) - it was never a real entry in THEMES,
+        // and index.html has no knowledge of it at all, so it must be
+        // accepted here regardless of what themesObj contains.
+        const isValidTheme = (key) => key === 'random' || (themesObj && !!themesObj[key]);
+
+        const params = new URLSearchParams(window.location.search);
+        const urlTheme = params.get('theme');
+        if (urlTheme && isValidTheme(urlTheme)) {
+            return urlTheme;
+        }
+        const savedTheme = localStorage.getItem('dino_theme');
+        if (savedTheme && isValidTheme(savedTheme)) {
+            return savedTheme;
+        }
+        return 'color';
+    };
 
     /**
      * Cached result of the monochrome check for the active theme.
@@ -4080,8 +4096,8 @@
                     this.canvasCtx.fillRect(pEnd - 2, pY + 4, 2, 12);
 
                     // Sample and draw themed grass texture from sprite sheet
-                    const spriteHorizon = IS_HIDPI ? Runner.spriteDefinition.HDPI.HORIZON : Runner.spriteDefinition.LDPI.HORIZON;
-                    const scale = IS_HIDPI ? 2 : 1;
+                    const spriteHorizon = Runner.spriteDefinition.HDPI.HORIZON;
+                    const scale = 2;
                     const sourceX = spriteHorizon.x + (40 * scale);
                     const sourceY = spriteHorizon.y;
                     const sourceW = pWidth * scale;
