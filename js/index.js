@@ -143,6 +143,11 @@
 
         // Weight of Being (Dread Meter)
         this.dreadLevel = 0; // 0 to 100%
+
+        // Sisyphus Paradox mechanic
+        this.sisyphusTimer = 0;
+        this.sisyphusCooldown = getRandomNum(25000, 40000); // First rift in 25–40s
+        this.mirrorRift = null;
         
         // Philosophical quotes system
         this.quoteTimer = 0;
@@ -1126,6 +1131,7 @@
         },
 
         clearCanvas: function () {
+            this.canvasCtx.globalAlpha = 1.0;
             this.canvasCtx.clearRect(0, 0, this.dimensions.WIDTH,
                 this.dimensions.HEIGHT);
         },
@@ -1243,8 +1249,29 @@
                 // and ice speed boost. Computed once and shared by the
                 // parallax background below and the horizon/obstacles
                 // further down - see note above.
-                var speedMultiplier = (this.windTimer > 0 ? 0.60 : 1.0) * (this.isOnIce ? 1.40 : 1.0);
+                var speedMultiplier = (this.windTimer > 0 ? 0.75 : 1.0) * (this.isOnIce ? 1.40 : 1.0);
                 var effectiveSpeed = this.currentSpeed * speedMultiplier;
+
+                // Sisyphus Paradox: timer countdown & rift spawner
+                if (this.sisyphusTimer > 0) {
+                    this.sisyphusTimer = Math.max(0, this.sisyphusTimer - deltaTime);
+                    if (this.sisyphusTimer === 0) {
+                        this.triggerGlitch(); // Snap-back reality glitch
+                        this.playEtherealChime();
+                    }
+                } else {
+                    this.sisyphusCooldown -= deltaTime;
+                    if (this.sisyphusCooldown <= 0 && !this.mirrorRift) {
+                        this.mirrorRift = new MirrorRift(this.canvas, this.dimensions.WIDTH);
+                    }
+                }
+
+                // 1. Begin Sisyphus Mirror Transform for the game world
+                if (this.sisyphusTimer > 0) {
+                    this.canvasCtx.save();
+                    this.canvasCtx.translate(this.dimensions.WIDTH, 0);
+                    this.canvasCtx.scale(-1, 1);
+                }
 
                 // Draw and advance parallax background under all other elements
                 this.drawParallax(currentDelta, effectiveSpeed);
@@ -1558,6 +1585,18 @@
                     this.gameOver();
                 }
 
+                // Mirror Rift movement and collision check
+                if (this.mirrorRift) {
+                    this.mirrorRift.update(deltaTime, effectiveSpeed);
+                    if (this.checkRiftCollision(this.mirrorRift, this.tRex)) {
+                        this.triggerSisyphusParadox();
+                        this.mirrorRift = null;
+                    } else if (this.mirrorRift.remove) {
+                        this.mirrorRift = null;
+                        this.sisyphusCooldown = getRandomNum(25000, 40000);
+                    }
+                }
+
                 // Bonus item management
                 var actualDistance = this.distanceMeter.getActualDistance(Math.ceil(this.distanceRan));
                 if (actualDistance >= this.nextBonusScore && !this.bonusItem) {
@@ -1619,18 +1658,13 @@
                     }
                 }
 
-                var playAchievementSound = this.distanceMeter.update(deltaTime,
-                    Math.ceil(this.distanceRan));
-
-                // Draw Power-Up Indicator HUD
-                if (this.activePowerUpTimer > 0 && this.activePowerUpName) {
-                    this.canvasCtx.save();
-                    this.canvasCtx.font = 'bold 12px monospace';
-                    this.canvasCtx.fillStyle = '#333333';
-                    this.canvasCtx.textAlign = 'left';
-                    this.canvasCtx.fillText('POWER-UP: ' + this.activePowerUpName, 15, 25);
+                // 2. End Sisyphus Mirror Transform before rendering HUD & UI text
+                if (this.sisyphusTimer > 0) {
                     this.canvasCtx.restore();
                 }
+
+                var playAchievementSound = this.distanceMeter.update(deltaTime,
+                    Math.ceil(this.distanceRan));
 
                 // Draw Philosophical Quote Banner at top center of screen with background rectangle for readability
                 if (this.currentQuoteDisplayTimer > 0 && this.currentQuoteText) {
@@ -1674,44 +1708,13 @@
                     this.canvasCtx.restore();
                 }
 
-                // Draw Active Timers HUD
-                var activeStatusY = 40;
-                this.canvasCtx.save();
-                this.canvasCtx.font = '11px monospace';
-                this.canvasCtx.fillStyle = '#666666';
-                this.canvasCtx.textAlign = 'left';
-                if (this.invincibleTimer > 0) {
-                    this.canvasCtx.fillText('INVINCIBLE: ' + Math.ceil(this.invincibleTimer / 1000) + 's', 15, activeStatusY);
-                    activeStatusY += 15;
-                }
-                if (this.invisibleTimer > 0) {
-                    this.canvasCtx.fillText('INVISIBLE: ' + Math.ceil(this.invisibleTimer / 1000) + 's', 15, activeStatusY);
-                    activeStatusY += 15;
-                }
-                if (this.slowTimeTimer > 0) {
-                    this.canvasCtx.fillText('SLOW TIME: ' + Math.ceil(this.slowTimeTimer / 1000) + 's', 15, activeStatusY);
-                    activeStatusY += 15;
-                }
-                if (this.doubleJumpTimer > 0) {
-                    this.canvasCtx.fillText('DOUBLE JUMP: ' + Math.ceil(this.doubleJumpTimer / 1000) + 's', 15, activeStatusY);
-                    activeStatusY += 15;
-                }
-                if (this.flutterTimer > 0) {
-                    this.canvasCtx.fillText('FLUTTER: ' + Math.ceil(this.flutterTimer / 1000) + 's', 15, activeStatusY);
-                    activeStatusY += 15;
-                }
-                if (this.laserTimer > 0) {
-                    this.canvasCtx.fillText('LASER: ' + Math.ceil(this.laserTimer / 1000) + 's', 15, activeStatusY);
-                    activeStatusY += 15;
-                }
-                if (this.tRex && this.tRex.hasShield) {
-                    this.canvasCtx.fillText('SHIELD ACTIVE', 15, activeStatusY);
-                }
+                // Render high-contrast Power-Up HUD
+                this.drawPowerUpHUD();
+				
                 // Render wind streaks if wind is active
                 if (this.windTimer > 0) {
                     this.renderWindLines();
                 }
-                this.canvasCtx.restore();
 
                 if (playAchievementSound) {
                     this.playSound(this.soundFx.SCORE);
@@ -1756,6 +1759,11 @@
                     this.drawIdentityCrisisBanner();
                 }
 
+                // Render Sisyphus Paradox Banner & Vignette
+                if (this.sisyphusTimer > 0) {
+                    this.drawSisyphusBanner();
+                }
+
                 // Render Weight of Being HUD at top center
                 this.drawWeightOfBeingHUD();
             } else if (this.crashed) {
@@ -1771,21 +1779,26 @@
 
             if (this.playing || this.crashed || (!this.activated &&
                 this.tRex.blinkCount < Runner.config.MAX_BLINK_COUNT)) {
+
+                // Mirror character & active particles during Sisyphus Paradox
+                if (this.sisyphusTimer > 0 && this.playing) {
+                    this.canvasCtx.save();
+                    this.canvasCtx.translate(this.dimensions.WIDTH, 0);
+                    this.canvasCtx.scale(-1, 1);
+                }
+
                 this.tRex.update(deltaTime);
                 this.scheduleNextUpdate();
                 
-                // Update and render active particles. One save/restore for
-                // the whole batch (particles only ever touch globalAlpha
-                // and fillStyle) instead of one pair per particle - matters
-                // once a burst puts dozens of them on screen at once.
-                if (this.particles.length > 0) {
-                    this.canvasCtx.save();
-                    for (var p = this.particles.length - 1; p >= 0; p--) {
-                        this.particles[p].update(deltaTime);
-                        if (this.particles[p].life >= this.particles[p].maxLife) {
-                            this.particles.splice(p, 1);
-                        }
+                // Update and render active particles
+                for (var p = this.particles.length - 1; p >= 0; p--) {
+                    this.particles[p].update(deltaTime);
+                    if (this.particles[p].life >= this.particles[p].maxLife) {
+                        this.particles.splice(p, 1);
                     }
+                }
+
+                if (this.sisyphusTimer > 0 && this.playing) {
                     this.canvasCtx.restore();
                 }
             }
@@ -2306,6 +2319,8 @@
             }
             this.windTimer = 0;
             this.windLines = [];
+			this.sisyphusTimer = 0;
+            this.mirrorRift = null;
 
             // Clear and redraw background once upon dying, then let update loop handle death frames
             this.clearCanvas();
@@ -2412,6 +2427,9 @@
                 this.windTimer = 0;
                 this.windLines = [];
                 this.windCooldown = getRandomNum(15000, 30000);
+                this.sisyphusTimer = 0;
+                this.mirrorRift = null;
+                this.sisyphusCooldown = getRandomNum(25000, 40000);
                 this.shakeTimer = 0;
 				this.crashedTime = 0;
                 this.invincibleTimer = 0;
@@ -2664,7 +2682,7 @@
          */
         computeQuoteWrap: function (text) {
             this.canvasCtx.font = 'bold 11px monospace';
-            var maxWidth = this.dimensions.WIDTH - 40;
+            var maxWidth = this.dimensions.WIDTH - 140;
             var words = text.split(' ');
             var line = '';
             var lines = [];
@@ -2899,6 +2917,8 @@
             var boxH = 26;
             var boxX = (width - boxW) / 2;
             var boxY = 6;
+            if (this.konamiDisplayTimer > 0) boxY += 28;
+            if (this.sisyphusTimer > 0) boxY += 28;
 
             // High-contrast neon glitch banner
             ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.95)' : 'rgba(10, 10, 25, 0.92)';
@@ -2946,8 +2966,11 @@
             var barW = 170;
             var barH = 14;
             var x = (width - barW) / 2;
-            // Shift down if the Identity Crisis banner is currently active
-            var y = (this.identityCrisisDisplayTimer > 0) ? 36 : 6;
+            // Shift down if other banners are currently active
+            var y = 6;
+            if (this.identityCrisisDisplayTimer > 0) y += 28;
+            if (this.konamiDisplayTimer > 0) y += 28;
+            if (this.sisyphusTimer > 0) y += 28;
 
             ctx.save();
 
@@ -2975,7 +2998,7 @@
             }
 
             // HUD label & percentage
-            ctx.font = 'bold 8px monospace';
+            ctx.font = 'bold 12px monospace';
             ctx.fillStyle = (this.dreadLevel > 50 && !this.inverted) ? '#ffffff' : (this.inverted ? '#000000' : '#cccccc');
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -3089,6 +3112,190 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(text, width / 2, boxY + (boxH / 2));
+            ctx.restore();
+        },
+
+        /**
+         * Check collision between player and the ethereal rift.
+         */
+        checkRiftCollision: function (rift, tRex) {
+            var tRexLeft = tRex.xPos;
+            var tRexRight = tRex.xPos + (tRex.ducking ? Trex.config.WIDTH_DUCK : Trex.config.WIDTH);
+            return (tRexRight >= rift.xPos && tRexLeft <= rift.xPos + rift.width);
+        },
+
+        /**
+         * Activate the 10-second Sisyphus Paradox inverted velocity mode.
+         */
+        triggerSisyphusParadox: function () {
+            this.sisyphusTimer = 10000;
+            this.sisyphusCooldown = getRandomNum(35000, 55000);
+
+            // Voice announcement: interrupt any ongoing quote monologue
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                var utterance = new SpeechSynthesisUtterance("Sisyphus is being sent back");
+                utterance.rate = 1.0;
+                utterance.pitch = 0.9;
+                window.speechSynthesis.speak(utterance);
+            }
+
+            // Trigger reality-shattering glitch effect
+            this.triggerGlitch();
+            this.playEtherealChime();
+
+            // Glass/mirror shatter particles
+            var burstX = this.tRex.xPos + 25;
+            var burstY = this.tRex.yPos + 15;
+            var colors = ['#00f0ff', '#ffffff', '#b026ff', '#80d8ff', '#ff00aa'];
+            for (var p = 0; p < 35; p++) {
+                this.particles.push(new Particle(this.canvasCtx, burstX, burstY, {
+                    speed: 7,
+                    upward: 2,
+                    size: getRandomNum(2, 5),
+                    color: colors[getRandomNum(0, colors.length - 1)],
+                    life: getRandomNum(500, 900),
+                    isFirework: true
+                }));
+            }
+        },
+
+        /**
+         * Synthesize a celestial ethereal chime on Web Audio.
+         */
+        playEtherealChime: function () {
+            if (!this.audioContext) return;
+            try {
+                var ctx = this.audioContext;
+                var now = ctx.currentTime;
+                var notes = [587.33, 739.99, 880.00, 1174.66]; // D5, F#5, A5, D6
+                notes.forEach(function (freq, idx) {
+                    var osc = ctx.createOscillator();
+                    var gain = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + idx * 0.05);
+                    gain.gain.setValueAtTime(0.12, now + idx * 0.05);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.05 + 0.6);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(now + idx * 0.05);
+                    osc.stop(now + idx * 0.05 + 0.6);
+                });
+            } catch (e) {}
+        },
+
+        /**
+         * Render the Sisyphus Paradox countdown banner and dimensional edge vignette.
+         */
+        drawSisyphusBanner: function () {
+            var ctx = this.canvasCtx;
+            var width = this.dimensions.WIDTH;
+            var secondsLeft = (this.sisyphusTimer / 1000).toFixed(1);
+            var text = "✦ SISYPHUS PARADOX: INVERTED VELOCITY (" + secondsLeft + "s) ✦";
+
+            ctx.save();
+            ctx.font = 'bold 11px monospace';
+            var metrics = ctx.measureText(text);
+            var boxW = metrics.width + 24;
+            var boxH = 22;
+            var boxX = (width - boxW) / 2;
+            var boxY = 6;
+            if (this.identityCrisisDisplayTimer > 0) boxY += 28;
+            if (this.konamiDisplayTimer > 0) boxY += 28;
+
+            ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.92)' : 'rgba(15, 8, 30, 0.92)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#00f0ff';
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            ctx.fillStyle = '#00f0ff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, width / 2, boxY + (boxH / 2));
+
+            // Ethereal mirror vignette at the canvas edges
+            var gradient = ctx.createLinearGradient(0, 0, width, 0);
+            gradient.addColorStop(0, 'rgba(0, 240, 255, 0.22)');
+            gradient.addColorStop(0.12, 'rgba(176, 38, 255, 0.05)');
+            gradient.addColorStop(0.5, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(0.88, 'rgba(176, 38, 255, 0.05)');
+            gradient.addColorStop(1, 'rgba(0, 240, 255, 0.22)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, width, this.dimensions.HEIGHT);
+
+            ctx.restore();
+        },
+
+        /**
+         * Render active power-ups and timers in a high-contrast backing box at the top left.
+         */
+        drawPowerUpHUD: function () {
+            var activeList = [];
+
+            if (this.activePowerUpTimer > 0 && this.activePowerUpName) {
+                activeList.push({ text: '★ ' + this.activePowerUpName, color: '#ffd700' });
+            }
+            if (this.invincibleTimer > 0) {
+                activeList.push({ text: 'INVINCIBLE: ' + Math.ceil(this.invincibleTimer / 1000) + 's', color: '#00ffff' });
+            }
+            if (this.invisibleTimer > 0) {
+                activeList.push({ text: 'INVISIBLE: ' + Math.ceil(this.invisibleTimer / 1000) + 's', color: '#c084fc' });
+            }
+            if (this.slowTimeTimer > 0) {
+                activeList.push({ text: 'SLOW TIME: ' + Math.ceil(this.slowTimeTimer / 1000) + 's', color: '#38bdf8' });
+            }
+            if (this.doubleJumpTimer > 0) {
+                activeList.push({ text: 'DOUBLE JUMP: ' + Math.ceil(this.doubleJumpTimer / 1000) + 's', color: '#4ade80' });
+            }
+            if (this.flutterTimer > 0) {
+                activeList.push({ text: 'FLUTTER: ' + Math.ceil(this.flutterTimer / 1000) + 's', color: '#f472b6' });
+            }
+            if (this.laserTimer > 0) {
+                activeList.push({ text: 'LASER: ' + Math.ceil(this.laserTimer / 1000) + 's', color: '#ff3366' });
+            }
+            if (this.tRex && this.tRex.hasShield) {
+                activeList.push({ text: 'SHIELD ACTIVE', color: '#22d3ee' });
+            }
+
+            if (activeList.length === 0) return;
+
+            var ctx = this.canvasCtx;
+            ctx.save();
+            ctx.font = 'bold 10px monospace';
+
+            var maxW = 0;
+            for (var a = 0; a < activeList.length; a++) {
+                var w = ctx.measureText(activeList[a].text).width;
+                if (w > maxW) maxW = w;
+            }
+
+            var padX = 8;
+            var padY = 5;
+            var lineH = 13;
+            var boxX = 10;
+            var boxY = 8; // Placed high in the corner
+            var boxW = maxW + (padX * 2);
+            var boxH = (activeList.length * lineH) + (padY * 2) - 2;
+
+            // Semi-transparent high-contrast dark box (works on light & dark themes)
+            ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.92)' : 'rgba(12, 16, 24, 0.88)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            // Subtle border outline
+            ctx.strokeStyle = this.inverted ? '#222222' : 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            // Text entries
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            for (var i = 0; i < activeList.length; i++) {
+                ctx.fillStyle = this.inverted ? '#111111' : activeList[i].color;
+                ctx.fillText(activeList[i].text, boxX + padX, boxY + padY + (i * lineH));
+            }
+
             ctx.restore();
         },
     };
@@ -3654,12 +3861,26 @@
     BonusItem.prototype = {
         draw: function () {
             if (this.image.complete && this.image.naturalWidth > 0) {
-                this.canvasCtx.drawImage(
-                    this.image,
-                    0, 0, this.image.naturalWidth, this.image.naturalHeight,
-                    this.xPos, this.yPos,
-                    this.width, this.height
-                );
+                var isSisyphus = window.Runner && Runner.instance_ && Runner.instance_.sisyphusTimer > 0;
+                if (isSisyphus) {
+                    this.canvasCtx.save();
+                    this.canvasCtx.translate(this.xPos + this.width / 2, this.yPos + this.height / 2);
+                    this.canvasCtx.scale(-1, 1);
+                    this.canvasCtx.drawImage(
+                        this.image,
+                        0, 0, this.image.naturalWidth, this.image.naturalHeight,
+                        -this.width / 2, -this.height / 2,
+                        this.width, this.height
+                    );
+                    this.canvasCtx.restore();
+                } else {
+                    this.canvasCtx.drawImage(
+                        this.image,
+                        0, 0, this.image.naturalWidth, this.image.naturalHeight,
+                        this.xPos, this.yPos,
+                        this.width, this.height
+                    );
+                }
             }
         },
 
@@ -4177,6 +4398,93 @@
         },
     ];
 
+    //******************************************************************************
+
+    /**
+     * Ethereal Mirror Rift Entity.
+     * @param {HTMLCanvasElement} canvas
+     * @param {number} canvasWidth
+     * @constructor
+     */
+    function MirrorRift(canvas, canvasWidth) {
+        this.canvas = canvas;
+        this.canvasCtx = canvas.getContext('2d');
+        this.width = 38;
+        this.height = 155;
+        this.xPos = canvasWidth + 30;
+        this.yPos = 72; // Spans from air down into the track surface
+        this.remove = false;
+        this.animTimer = 0;
+    }
+
+    MirrorRift.prototype = {
+        draw: function () {
+            var ctx = this.canvasCtx;
+            ctx.save();
+            var centerX = this.xPos + (this.width / 2);
+            var centerY = this.yPos + (this.height / 2);
+
+            // Shimmering oscillation
+            var pulse = Math.sin(this.animTimer * 0.008);
+            var radX = (this.width / 2) + (pulse * 3);
+            var radY = this.height / 2;
+
+            // Outer ethereal celestial aura
+            var gradient = ctx.createRadialGradient(centerX, centerY, 6, centerX, centerY, radY);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+            gradient.addColorStop(0.35, 'rgba(0, 240, 255, 0.75)');
+            gradient.addColorStop(0.75, 'rgba(176, 38, 255, 0.45)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.ellipse(centerX, centerY, radX + 10, radY + 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Electric rift fissure seam
+            ctx.strokeStyle = '#00f0ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(centerX, centerY, radX, radY, 0, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Crackling internal reality seam
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(centerX + Math.sin(this.animTimer * 0.02) * 4, this.yPos + 8);
+            ctx.lineTo(centerX - Math.sin(this.animTimer * 0.015) * 6, centerY);
+            ctx.lineTo(centerX + Math.sin(this.animTimer * 0.025) * 4, this.yPos + this.height - 8);
+            ctx.stroke();
+
+            ctx.restore();
+        },
+
+        update: function (deltaTime, speed) {
+            if (!this.remove) {
+                this.animTimer += deltaTime;
+                this.xPos -= Math.floor((speed * FPS / 1000) * deltaTime);
+                this.draw();
+
+                // Emit floating ethereal rift particles
+                if (window.Runner && Runner.instance_ && Math.random() < 0.35) {
+                    Runner.instance_.particles.push(new Particle(this.canvasCtx,
+                        this.xPos + getRandomNum(0, this.width),
+                        this.yPos + getRandomNum(10, this.height - 10), {
+                            speed: 2.5,
+                            upward: 1,
+                            size: getRandomNum(2, 3),
+                            color: ['#00f0ff', '#b026ff', '#ffffff'][getRandomNum(0, 2)],
+                            life: getRandomNum(300, 600)
+                        }));
+                }
+
+                if (this.xPos + this.width < -50) {
+                    this.remove = true;
+                }
+            }
+        }
+    };
 
     //******************************************************************************
     /**
@@ -4950,7 +5258,7 @@
             this.canvasCtx.drawImage(Runner.getSpriteImage('CLOUD'), this.spritePos.x,
                 this.spritePos.y,
                 sourceWidth, sourceHeight,
-                this.xPos, this.yPos,
+                Math.round(this.xPos), this.yPos,
                 Cloud.config.WIDTH, Cloud.config.HEIGHT);
 
             this.canvasCtx.restore();
@@ -4962,7 +5270,7 @@
          */
         update: function (speed) {
             if (!this.remove) {
-                this.xPos -= Math.ceil(speed);
+                this.xPos -= speed;
                 this.draw();
 
                 // Mark as removeable if no longer in the canvas.
@@ -5195,9 +5503,11 @@
         },
         draw: function () {
             var alpha = Math.max(0, 1 - (this.life / this.maxLife));
+            this.canvasCtx.save();
             this.canvasCtx.globalAlpha = alpha;
             this.canvasCtx.fillStyle = this.color;
             this.canvasCtx.fillRect(Math.round(this.x), Math.round(this.y), this.size, this.size);
+            this.canvasCtx.restore();
         }
     };
 	
@@ -5408,7 +5718,8 @@
          * @param {number} currentSpeed
          */
         updateClouds: function (deltaTime, speed) {
-            var cloudSpeed = this.cloudSpeed / 1000 * deltaTime * speed;
+            // Exactly 1/8 (0.125x) of ground speed
+            var cloudSpeed = speed * 0.125 * (FPS / 1000) * deltaTime;
             var numClouds = this.clouds.length;
 
             if (numClouds) {
