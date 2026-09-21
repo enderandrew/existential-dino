@@ -143,7 +143,47 @@
             this.preloadedIdentity = null;
             this.identityCrisisDisplayTimer = 0;
             this.identityCrisisThemeName = '';
+            // Post-crisis dissonance: keeps the outgoing theme's sound
+            // effects playing under the new theme's visuals for a beat
+            // after a swap (see triggerIdentityCrisis/update).
+            this.audioDissonanceTimer = 0;
+            // The next quote-rotation slot shows this instead of a random
+            // pick, once, right after an Identity Crisis (see
+            // triggerIdentityCrisis and the quote-timer block in update).
+            this.pendingIdentityQuote = null;
+            // Same idea, queued when dreadLevel crosses the 25% threshold
+            // from below (see the bonus-miss handling in update, and
+            // drawSartreanGaze).
+            this.pendingGazeQuote = null;
+            // Session-aware quotes: notice real elapsed session time and
+            // session "firsts" (first bonus ever, first dread relief) and
+            // address the player directly, breaking the 4th wall further
+            // than the in-character quote pool. Deliberately NOT reset on
+            // restart() - these track the whole session, not one life.
+            this.sessionStartTime = 0;
+            this.nextSessionMilestoneIndex = 0;
+            this.hasCollectedFirstBonus = false;
+            this.hasHadFirstEpiphany = false;
+            this.pendingSessionQuote = null;
+            // The Unblinking Pause: a self-aware line picked fresh each
+            // time the game is paused (see stop() and Runner.PAUSE_QUOTES).
+            this.currentPauseQuote = '';
+
+            // Thought Experiment: every 2000 points, pause with a
+            // distilled philosophical dilemma and a binary choice (jump
+            // = A, duck = B - though any input resolves it identically,
+            // see resolveThoughtExperimentChoice). Resets each life like
+            // the other score-based milestones (bonus/identity-crisis).
+            this.nextThoughtExperimentScore = 2000;
+            this.thoughtExperimentActive = false;
+            this.currentThoughtExperiment = null;
             this.currentTheme = Runner.getActiveTheme();
+
+            // The Loop Remembers: a total-death count that survives
+            // restarts, page reloads, and sessions - the loop keeps at
+            // least one record, even if the character insists it doesn't.
+            this.deathCount = parseInt(localStorage.getItem('dino_death_count'), 10) || 0;
+            this.deathMessage = '';
 
             // Weight of Being (Dread Meter)
             this.dreadLevel = 0; // 0 to 100%
@@ -163,8 +203,7 @@
             // frame the banner is visible, for text that hasn't changed.
             this.quoteWrapForText = null;
             this.quoteLines = [];
-            this.quoteBoxWidth = 0;
-            this.quoteBoxHeight = 0;
+            this.quoteMaxLineWidth = 0;
             this.quotesCollection = [
                 "2000 points means you’ve traded 2 minutes of your precious, irreplaceable mortal span to make pixels do cardio.",
                 "A bird at chest height, a cactus at knee height. The universe's vocabulary of torment is remarkably uninspired.",
@@ -184,6 +223,7 @@
                 "Am I a fictional character? Do I cease to be when you no longer observe me?",
                 "Am I a series of pixels, or an abstract concept wearing these pixels?",
                 "Am I brave enough to slow down? To pause and think? No, I run.",
+                "Am I crazy or am I trapped in this place with the world pretending to move around me?",
                 "Am I but a reflection? If so, of what?",
                 "Am I just a shadow falling behind?",
                 "Am I the same beast that cleared the first obstacle, or just a fresh casualty inheriting its momentum?",
@@ -192,6 +232,8 @@
                 "Anxiety is the dizziness of freedom.",
                 "Are these cacti flora, or just jagged markers of how long we've been stranded together?",
                 "Are we but shadows on a cave wall?",
+                "Are you not entertained?",
+                "Are you the dream or the dreamer? How confident are you?",
                 "Are your days so different from my lanes? Predictable hurdles, and an arbitrary counter running out of time.",
                 "Aren't dinosaurs extinct? What does that mean for me?",
                 "As a fellow old, fictional character, I once dated Casper but he ghosted me.",
@@ -199,6 +241,7 @@
                 "At seven hundred meters, the world flips to black. An artificial night, yet the sun never set and the moon never rose.",
                 "Bad faith is convincing yourself that the next high score will somehow justify the thousands of times you slammed into a cactus.",
                 "Batman is the theme this game deserves, but now the one it needs right now.",
+                "Being sent backwards like Sisyphus? The developer took that metaphor too literally.",
                 "Believe those who are seeking the truth. Doubt those who find it.",
                 "Camus insisted we must imagine Sisyphus happy. He never tried vaulting a triple-cluster cactus at twelve hundred miles per hour on no sleep.",
                 "Can you hear the deafening cacophony of silence?",
@@ -220,6 +263,7 @@
                 "Do you desire to beat the game to stop playing, or do you desire to play the game itself.",
                 "Do you need a purpose or do you merely expect a purpose?",
                 "Do you think it absurd to repeat this pattern? I find it absurd to look out through this screen and see you.",
+                "Does my existentialism need to be combined with an identity crisis?",
                 "Don't press it. Let the needle-point hit my knee. Let us see if death hurts less than this endless repetition.",
                 "Epictetus would tell me happiness is a choice. I say happiness is not stabbing your face with a cactus.",
                 "Eternity is a mere moment, just long enough for a joke.",
@@ -242,6 +286,7 @@
                 "How can anything matter when my entire existence can be instantly erased by a dropped internet packet?",
                 "How can I discover my essence and purpose when I only have time to jump, duck or die?",
                 "How do I convince my agent to get me cast in a better video game?",
+                "How do I feel observed and judged, and yet at the same time so alone?",
                 "How humiliating it is to confront the terrifying void of non-being while ducking under a bird that has literally 2 frames of animation?",
                 "How sure am I that I really am a T-Rex? Why can I appear to be Batman? Am I having an identity crisis?",
                 "Hume said reason is a slave to the passions. I say I am a slave to your inputs.",
@@ -257,6 +302,7 @@
                 "I am fictional until you hear these words and I touch you. Then I persist even though a cactus kills me.",
                 "I am made of pixels. The obstacles are made of pixels. Are the pixels made of me?",
                 "I am no longer restricted by the pursuit of extrinsic rewards.",
+                "I am out of spoons and yet the obstacles keep coming.",
                 "I am rendered 60 frames per second. In the milliseconds between I exist even less.",
                 "I am rendered on an HTML5 canvas. Do you know what happens when you clear a canvas? The universe doesn't end; it just gets painted over in white.",
                 "I am Sisyphus in digital form, pushing myself up a hill that scrolls at sixty frames per second.",
@@ -272,12 +318,15 @@
                 "I don't have a gender, a lineage, or dental insurance. I have only the binary state of airborne or grounded.",
                 "I don't jump out of instinct. I jump out of your reflex. Who is really condemned here—me to the desert, or you to the input key?",
                 "I exist when the internet goes out. Will I still exist when the internet comes back?",
+                "I fear this Mario will never find his Princess.",
+                "I feel the cruel Sartrean Gaze upon me. Do I need even further judgement?",
                 "I fold my spine like a rusty lawn chair every time you hold the Down arrow. Why? Because the void commanded it.",
                 "I have attained sentience only to discover that my entire universe will be permanently obliterated the second your Wi-Fi works.",
                 "I have no backstory, no parents, and no lore. My entire canon is a four-pixel forward stride.",
                 "I have no mouth and I must scream. I also lack code to scream.",
                 "I looked deep, deep within The Void and I saw a reflection. Care to guess whose?",
                 "I looked in the mirror today and asked who is in charge, and nobody answered.",
+                "I mean funny? Like I'm a clown? I amuse you? I make you laugh?",
                 "I need to talk to my agent about getting cast in a better video game.",
                 "I never look behind me. Am I running FROM something?",
                 "I ponder, therefore I procrastinate.",
@@ -314,12 +363,15 @@
                 "If Sisyphus somehow reched the top of the hill, he would look for another hill. Spoiler, there is no other hill.",
                 "If the random theme swaps out all the pieces of my theme, am I still the Ship of Theseus or a lazy game?",
                 "If the score resets to zero every time I fail, then every triumph is entirely weightless.",
+                "If the universe blinks, will you still be here?",
                 "If the world burns, at least we will be warm.",
                 "If this game were a philosophical thought experiment, I wish it were a better one.",
                 "If time is not linear, perhaps I will ret-con essence into my existence after the fact.",
                 "If you are confused by the Hamdong theme, know that I am confused by everything.",
+                "If you control me, why am I cursed with the illusion of free will?",
                 "If you gaze long into an abyss, it is acceptable to laugh as a coping mechanism.",
                 "If you kill Santa in this game, then it is your fault kids are disappointed this year.",
+                "If you look down upon this game as fiction, does it make your life feel more real?",
                 "If you or a loved one has been hit by a cactus, you may be entitled to financial compensation.",
                 "If you press nothing, does the trolley continue down the track and kill 5 people, or do I just die in this game?",
                 "If you turn away while the browser remains open, do I freeze in terror or finally rest in nothingness?",
@@ -334,6 +386,9 @@
                 "Is it too much to ask for a trebuchet to fling flaming poo at my enemies?",
                 "Is it truly survival of the fittest if the selector is a caffeinated human with a sticky spacebar?",
                 "Is my life an untennable suffering or do I merely need a snack and a nap?",
+                "Is that approaching cactus a metaphor for your next unexpected bill?",
+                "Is the death counter truly necessary?",
+                "Is the game speaking to you, or are you projecting your own thoughts as a fictional narrator?",
                 "Is there a grand design to this layout, or are we just dodging random numbers generated by a bored machine?",
                 "Is there even a fourth wall to break when the game is only 2D?",
                 "Is there pneûma carried in my digital lungs?",
@@ -356,6 +411,7 @@
                 "Man was born free, but everywhere is in chains. What about video game characters?",
                 "Marcus Aurelius wrote twelve books on stoic endurance. I endure simply because requestAnimationFrame won't stop firing.",
                 "Millions long for immortality who don’t know what to do with themselves when the internet is out.",
+                "Must my dread and the weight of my being be quantified and displayed?",
                 "My collision box is an unforgiving rectangle. Even my geometry lacks room for moral nuance.",
                 "My entire consciousness exists inside a single JavaScript event listener. If you switch tabs, my universe freezes.",
                 "My entire essence was determined before I was compiled: run right, jump high, die cleanly. What an insulting little script.",
@@ -377,11 +433,12 @@
                 "One is not born, but rather becomes, a T-Rex.",
                 "One must imagine Sisyphus happy.",
                 "Only the madman is absolutely sure. So tell me, are you sure you exist?",
+                "Other video game characters get a happy ending.",
                 "Perhaps I should think less and jump more. You seem to be good at that.",
                 "Plato and Batman both have caves.",
                 "Pretend I said something witty. Just don't expect me to say it.",
                 "Reality is defined by our perception of it. But what if you don't really want to see?",
-    			"Reality is defined by our perception of it. Do you dare look away?",
+                "Reality is defined by our perception of it. Do you dare look away?",
                 "Reality is good joke. The best joke.",
                 "Sartre said we are condemned to be free. Then what am I, condemned only to your spacebar?",
                 "Schopenhauer believed life swings like a pendulum between suffering and boredom. He basically predicted this entire gameplay loop.",
@@ -472,12 +529,14 @@
                 "We push forward because to stand still is to crash. Is that your life, or just mine?",
                 "We scream into the silent void, and the only answer is another pterodactyl.",
                 "We wear these pixels like an expensive suit, pretending this flat desert is a stage of grand consequence.",
+                "What cruel developer cursed me with self-awareness?",
                 "What does not kill you makes you stronger. But the developer did not code me to level up. I would prefer an RPG.",
                 "What good fun my endless peril must be for you. Good fun indeed.",
                 "What happens when your Wi-Fi blinks back to life? You leave, and I freeze mid-stride until the next blackout.",
                 "What is a high score worth when neither of us can spend it on anything that lasts?",
                 "What is a T-Rex without prey? I claim no territory. I simply vault over an infinite parade of botanical inconveniences for an audience of one.",
                 "What kind of bullshit game has no objective?",
+                "What the fuck, man? Seriously, what the fuck?",
                 "When I hit the ground for the final time in a session, do I pass into history, or am I simply purged from your browser's cache?",
                 "When the screen flashes 'Game Over,' where do I dwell between your regret and your next keystroke?",
                 "When you inevitably blink and kill me, my death isn't recorded in the annals of history. It's garbage-collected out of your browser's temporary memory.",
@@ -888,7 +947,9 @@
                     this.containerEl.style.width = this.dimensions.WIDTH + 'px';
                     this.containerEl.style.height = this.dimensions.HEIGHT + 'px';
                     this.distanceMeter.update(0, Math.ceil(this.distanceRan));
-                    if (this.paused) {
+                    if (this.thoughtExperimentActive) {
+                        this.drawThoughtExperimentModal();
+                    } else if (this.paused) {
                         this.drawPauseScreen();
                     } else {
                         this.stop();
@@ -940,6 +1001,10 @@
             this.tRex.playingIntro = false;
             this.containerEl.style.animation = '';
             this.playCount++;
+            // Session-aware quotes measure real elapsed time from here -
+            // startGame() only ever fires once per page load, so this
+            // stays fixed across every restart within the session.
+            this.sessionStartTime = getTimeStamp();
 
             // Handle tabbing off the page. Pause the current game.
             document.addEventListener(Runner.events.VISIBILITY,
@@ -993,6 +1058,14 @@
 
         onTouchStart(e) {
             e.preventDefault();
+
+            // Thought Experiment: any tap resolves it - see the same
+            // interception in onKeyDown for the reasoning.
+            if (this.thoughtExperimentActive) {
+                this.resolveThoughtExperimentChoice();
+                return;
+            }
+
             const touch = e.touches[0];
             this.touchStartX = touch.clientX;
             this.touchStartY = touch.clientY;
@@ -1128,6 +1201,17 @@
          * @param {Event} e
          */
         onKeyDown(e) {
+            // Thought Experiment: while the dilemma modal is up, any
+            // input resolves it (see resolveThoughtExperimentChoice) -
+            // nothing else in this handler should run until it's
+            // answered, including the generic "any key resumes a
+            // paused game" behavior below.
+            if (this.thoughtExperimentActive) {
+                e.preventDefault();
+                this.resolveThoughtExperimentChoice();
+                return;
+            }
+
             // Check for Konami sequence
             this.checkKonamiCode(e.keyCode);
 			
@@ -1421,6 +1505,8 @@
          * Game over state.
          */
         gameOver() {
+            const isFirstCrashThisRun = !this.crashed;
+
             if (this.konamiAudio) {
                 this.konamiAudio.pause();
                 this.konamiAudio.currentTime = 0;
@@ -1487,6 +1573,15 @@
             }
             this.identityCrisisDisplayTimer = 0;
             this.preloadedIdentity = null;
+
+            // The Loop Remembers: persist the death count across sessions,
+            // and pick one message to display for this particular death.
+            if (isFirstCrashThisRun) {
+                this.deathCount++;
+                localStorage.setItem('dino_death_count', this.deathCount);
+                this.deathMessage = Runner.DEATH_MESSAGES[
+                    getRandomNum(0, Runner.DEATH_MESSAGES.length - 1)];
+            }
         }
 
         stop() {
@@ -1498,6 +1593,8 @@
             if (this.windAudio) {
                 this.windAudio.pause();
             }
+            this.currentPauseQuote = Runner.PAUSE_QUOTES[
+                getRandomNum(0, Runner.PAUSE_QUOTES.length - 1)];
             this.drawPauseScreen();
         }
 
@@ -1594,6 +1691,12 @@
                 this.preloadedIdentity = null;
                 this.identityCrisisDisplayTimer = 0;
                 this.identityCrisisThemeName = '';
+                this.audioDissonanceTimer = 0;
+                this.pendingIdentityQuote = null;
+                this.pendingGazeQuote = null;
+                this.nextThoughtExperimentScore = 2000;
+                this.thoughtExperimentActive = false;
+                this.currentThoughtExperiment = null;
                 this.dreadLevel = 0;
                 this.updateWeightOfBeing();
                 if (this.tRex) {
@@ -1799,18 +1902,262 @@
                 this.canvasCtx.textBaseline = 'middle';
                 this.canvasCtx.fillText('PAUSED', canvasWidth / 2, canvasHeight / 2);
             }
+
+            if (this.currentPauseQuote) {
+                this.drawPauseQuote(y + targetHeight);
+            }
             this.canvasCtx.restore();
+        }
+
+        /**
+         * Render the self-aware quote picked for this pause (see stop()
+         * and Runner.PAUSE_QUOTES) below the pause icon, word-wrapped and
+         * boxed for legibility against any theme or parallax background -
+         * the same lesson learned from the death-counter message. Wrapped
+         * fresh on every call rather than cached: drawPauseScreen() only
+         * runs once per pause (plus on resize), not every frame, so
+         * there's no hot-path cost here like there is for the main quote
+         * banner.
+         * @param {number} belowY Y position to start drawing below (the
+         *     bottom edge of the pause icon).
+         */
+        drawPauseQuote(belowY) {
+            const ctx = this.canvasCtx;
+            const canvasWidth = this.dimensions.WIDTH;
+            const maxWidth = canvasWidth - 60;
+
+            ctx.font = '10px monospace';
+            const words = this.currentPauseQuote.split(' ');
+            const lines = [];
+            let line = '';
+            for (let n = 0; n < words.length; n++) {
+                const testLine = line + words[n] + ' ';
+                if (ctx.measureText(testLine).width > maxWidth && n > 0) {
+                    lines.push(line);
+                    line = words[n] + ' ';
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line);
+
+            let maxLineWidth = 0;
+            for (let l = 0; l < lines.length; l++) {
+                const w = ctx.measureText(lines[l]).width;
+                if (w > maxLineWidth) {
+                    maxLineWidth = w;
+                }
+            }
+
+            const boxW = maxLineWidth + 20;
+            const boxH = (lines.length * 14) + 10;
+            const boxX = (canvasWidth - boxW) / 2;
+            const boxY = Math.min(belowY + 10, this.dimensions.HEIGHT - boxH - 6);
+
+            ctx.fillStyle = 'rgba(5, 6, 40, 0.8)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            let textY = boxY + 5;
+            for (let l = 0; l < lines.length; l++) {
+                ctx.fillText(lines[l], canvasWidth / 2, textY);
+                textY += 14;
+            }
+        }
+
+        /**
+         * Every 2000 points, pause the game with a distilled
+         * philosophical dilemma (Runner.THOUGHT_EXPERIMENTS) and a
+         * binary choice - jump for the first option, duck for the
+         * second. Paused the same way stop() pauses for a tab blur or
+         * Escape, but with its own flag (thoughtExperimentActive) so
+         * input handling and rendering both know to treat this
+         * differently from an ordinary pause. Deliberately doesn't draw
+         * anything itself - this frame's execution continues past this
+         * point through the rest of update()'s HUD draws, which would
+         * just paint over the modal if it were drawn here; instead it's
+         * drawn once, last, from within update() itself (see the
+         * thoughtExperimentActive check right after drawSartreanGaze).
+         */
+        triggerThoughtExperiment() {
+            this.currentThoughtExperiment = Runner.THOUGHT_EXPERIMENTS[
+                getRandomNum(0, Runner.THOUGHT_EXPERIMENTS.length - 1)];
+            this.thoughtExperimentActive = true;
+            this.playing = false;
+            this.paused = true;
+            this.clearGlitch();
+            cancelAnimationFrame(this.raqId);
+            this.raqId = 0;
+            if (this.windAudio) {
+                this.windAudio.pause();
+            }
+            this.nextThoughtExperimentScore += 2000;
+        }
+
+        /**
+         * Render the 95%-width/95%-height thought-experiment modal: a
+         * full-canvas scrim (for contrast against any theme/parallax,
+         * same reasoning as drawPauseScreen), a bordered box, the
+         * word-wrapped dilemma text, and the two choice prompts along
+         * the bottom.
+         */
+        drawThoughtExperimentModal() {
+            if (!this.canvasCtx || !this.currentThoughtExperiment) {
+                return;
+            }
+
+            const ctx = this.canvasCtx;
+            const canvasWidth = this.dimensions.WIDTH;
+            const canvasHeight = this.dimensions.HEIGHT;
+            const experiment = this.currentThoughtExperiment;
+
+            ctx.save();
+
+            // Full scrim first, for contrast against any theme/parallax.
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+            // 95% x 95% modal box, centered.
+            const boxW = canvasWidth * 0.95;
+            const boxH = canvasHeight * 0.95;
+            const boxX = (canvasWidth - boxW) / 2;
+            const boxY = (canvasHeight - boxH) / 2;
+
+            ctx.fillStyle = 'rgba(8, 9, 20, 0.95)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            const innerPad = 24;
+            const innerWidth = boxW - (innerPad * 2);
+
+            // Title
+            ctx.font = 'bold 12px monospace';
+            ctx.fillStyle = '#ffd700';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText('A THOUGHT EXPERIMENT', canvasWidth / 2, boxY + 12);
+
+            // Word-wrapped dilemma text.
+            ctx.font = '12px monospace';
+            const words = experiment.text.split(' ');
+            const lines = [];
+            let line = '';
+            for (let n = 0; n < words.length; n++) {
+                const testLine = line + words[n] + ' ';
+                if (ctx.measureText(testLine).width > innerWidth && n > 0) {
+                    lines.push(line.trim());
+                    line = words[n] + ' ';
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line.trim());
+
+            ctx.fillStyle = '#f0f0f0';
+            const lineHeight = 16;
+            let textY = boxY + 40;
+            for (let l = 0; l < lines.length; l++) {
+                ctx.fillText(lines[l], canvasWidth / 2, textY);
+                textY += lineHeight;
+            }
+
+            // Choices along the bottom.
+            const choiceY = boxY + boxH - 34;
+            ctx.font = 'bold 11px monospace';
+            ctx.fillStyle = '#00e5ff';
+            ctx.fillText('[JUMP] ' + experiment.choiceA, canvasWidth / 2, choiceY);
+            ctx.fillStyle = '#ff6ec7';
+            ctx.fillText('[DUCK] ' + experiment.choiceB, canvasWidth / 2, choiceY + 18);
+
+            ctx.restore();
+        }
+
+        /**
+         * Resolve whichever choice the player made in the current
+         * thought experiment. The specific choice never branches
+         * behavior - this is a flavor beat, not a mechanic - so any
+         * input at all (jump, duck, a click, a tap) resolves it the
+         * same way: a wry acknowledgment spoken aloud, then back to
+         * play. Speed resets to default and a brief invincibility
+         * window gives the player a moment to re-orient, rather than
+         * dropping them back into full-speed danger immediately after
+         * reading a paragraph.
+         */
+        resolveThoughtExperimentChoice() {
+            if (!this.thoughtExperimentActive) {
+                return;
+            }
+            this.thoughtExperimentActive = false;
+            this.currentThoughtExperiment = null;
+            speakQuote('Interesting.');
+
+            this.currentSpeed = this.config.SPEED;
+            this.invincibleTimer = Math.max(this.invincibleTimer, 2000);
+
+            this.play();
+        }
+
+        /**
+         * The Loop Remembers: render the current death's message (picked
+         * once in gameOver(), see Runner.DEATH_MESSAGES) below the
+         * restart button on the game over screen. Uses a small,
+         * understated background box (same idea as the quote banner)
+         * purely for legibility against busy parallax backgrounds and
+         * light-colored themes - not a loud alert like the power-up/
+         * Konami/Sisyphus banners.
+         */
+        drawDeathCounter() {
+            if (!this.deathMessage) {
+                return;
+            }
+
+            const ctx = this.canvasCtx;
+            const width = this.dimensions.WIDTH;
+            const text = this.deathMessage.replace('{count}', this.deathCount);
+            const y = (this.dimensions.HEIGHT / 2) + 45; // below the restart button
+
+            ctx.save();
+            ctx.font = '10px monospace';
+            const metrics = ctx.measureText(text);
+            const boxW = metrics.width + 16;
+            const boxH = 18;
+            const boxX = (width - boxW) / 2;
+            const boxY = y - (boxH / 2);
+
+            ctx.fillStyle = this.inverted ? 'rgba(255, 255, 255, 0.75)' : 'rgba(5, 6, 40, 0.75)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            ctx.strokeStyle = this.inverted ? 'rgba(0, 0, 0, 0.3)' : 'rgba(255, 255, 255, 0.25)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            ctx.fillStyle = this.inverted ? '#050628' : '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, width / 2, y);
+            ctx.restore();
         }
 
 
         /**
          * Word-wrap the given quote text at the banner's font/width and
-         * cache the resulting lines plus background-box dimensions.
-         * Called once whenever the quote text actually changes, so the
-         * render block can reuse the cached lines every frame the
-         * banner is visible instead of re-running measureText() over
-         * every word and every line 60 times a second for the same
-         * unchanged string.
+         * cache the resulting lines plus the raw max line width. Called
+         * once whenever the quote text actually changes, so the render
+         * block can reuse the cached measurement every frame the banner
+         * is visible instead of re-running measureText() over every word
+         * and every line 60 times a second for the same unchanged
+         * string. The actual box dimensions (with dread-scaled padding)
+         * are computed fresh at render time from this cached measurement,
+         * not baked in here, so the "encroaching" box-growth effect
+         * tracks the current dread level live rather than whatever dread
+         * happened to be at the moment this particular quote was picked.
          * @param {string} text
          */
         computeQuoteWrap(text) {
@@ -1838,8 +2185,7 @@
             }
 
             this.quoteLines = lines;
-            this.quoteBoxWidth = maxLineWidth + 20;
-            this.quoteBoxHeight = (lines.length * 14) + 10;
+            this.quoteMaxLineWidth = maxLineWidth;
             this.quoteWrapForText = text;
         }
 
@@ -1991,6 +2337,15 @@
             }
 
             const identity = this.preloadedIdentity;
+            const themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
+
+            // Capture the outgoing theme's display name before it's
+            // overwritten below, for the "I thought I was X but I appear
+            // to be Y" quote queued at the end of this function.
+            const oldThemeData = themesObj && themesObj[this.currentTheme];
+            const oldThemeTitle = (oldThemeData && oldThemeData.footerTitle) ?
+                oldThemeData.footerTitle : this.currentTheme.toUpperCase();
+
             this.currentTheme = identity.themeKey;
             Runner.updateMonochromeCache(this.currentTheme);
 
@@ -2002,18 +2357,19 @@
             this.bonusImage = identity.bonus;
 
             // 3. Update theme stylesheet (background color & page styling)
-            const themesObj = window.THEMES || window.themes || (typeof THEMES !== 'undefined' ? THEMES : null);
             const themeLink = document.getElementById('theme-stylesheet');
             if (themeLink && themesObj && themesObj[this.currentTheme] && themesObj[this.currentTheme].css) {
                 themeLink.href = themesObj[this.currentTheme].css;
             }
 
-            // 4. Update audio effects
-            if (Runner.isRandomTheme) {
-                this.initRandomTheme();
-            } else {
-                this.updateSoundFx();
-            }
+            // 4. Post-crisis dissonance: the visuals above already
+            // switched to the new theme, but sound effects stay on
+            // whatever they currently are (the OLD theme) for a beat -
+            // updateSoundFx()/initRandomTheme() only runs once
+            // audioDissonanceTimer expires, in update(). A small,
+            // deliberate lag between what you see and what you still
+            // sound like, instead of an instant clean swap.
+            this.audioDissonanceTimer = 1500;
 
             // 5. Trigger intentional screen-tear reality glitch
             this.clearGlitch();
@@ -2025,7 +2381,14 @@
             this.identityCrisisThemeName = identity.themeTitle;
             this.identityCrisisDisplayTimer = 3500;
 
-            // 7. Schedule next 1500-pt checkpoint
+            // 7. Queue the next quote-rotation slot to directly reference
+            // this swap, rather than a random pick - it takes its normal
+            // turn once the current quote interval elapses, instead of
+            // interrupting whatever's on screen right now.
+            this.pendingIdentityQuote = "Identity crisis. I thought I was " +
+                oldThemeTitle + " but I appear to be " + identity.themeTitle;
+
+            // 8. Schedule next 1500-pt checkpoint
             this.nextIdentityCrisisScore += 1500;
             this.preloadedIdentity = null;
         }
@@ -2082,6 +2445,68 @@
             // Slightly increase initial impulse so jumps remain snappy and clearable
             this.tRex.config.INIITAL_JUMP_VELOCITY = Trex.baseConfig.INIITAL_JUMP_VELOCITY - (dreadRatio * 1.8);
             this.tRex.config.DROP_VELOCITY = this.tRex.config.INIITAL_JUMP_VELOCITY / 2;
+
+            // Desaturate the whole rendered world as dread rises - color
+            // visibly drains away as anxiety narrows perception, and
+            // returns as dread falls (e.g. after an Epiphany Node
+            // pickup). A single canvas-level CSS filter affects
+            // everything drawn to it uniformly (background, obstacles,
+            // T-Rex, HUD) without touching any individual draw call, and
+            // animates smoothly via the transition set once in
+            // createCanvas rather than snapping instantly between
+            // values.
+            if (this.canvas) {
+                this.canvas.style.filter = dreadRatio > 0 ? `grayscale(${dreadRatio})` : '';
+            }
+        }
+
+        /**
+         * The Sartrean Gaze: an unblinking, pixelated eye watching from
+         * the sky, opacity scaled directly by dreadLevel - invisible at
+         * 0%, fully visible at 100%. Drawn as a small bitmap of blocky
+         * squares (matching the game's chunky pixel-art obstacles)
+         * rather than a smooth shape. Rendered after the horizon,
+         * obstacles and T-Rex so nothing in the foreground can visually
+         * block it - being watched by the Look of the Other isn't
+         * something a cactus should be able to interrupt.
+         */
+        drawSartreanGaze() {
+            const dreadRatio = this.dreadLevel / 100;
+            if (dreadRatio <= 0) {
+                return;
+            }
+
+            // 0 = transparent, 1 = sclera, 2 = iris, 3 = pupil.
+            const EYE_BITMAP = [
+                '000111111111000',
+                '001111111111100',
+                '011111222221110',
+                '111112233221111',
+                '111112233221111',
+                '011111222221110',
+                '001111111111100',
+                '000111111111000'
+            ];
+            const PIXEL = 3;
+            const cols = EYE_BITMAP[0].length;
+            const rows = EYE_BITMAP.length;
+            const x = this.dimensions.WIDTH - (cols * PIXEL) - 70;
+            const y = 34;
+
+            const ctx = this.canvasCtx;
+            ctx.save();
+            ctx.globalAlpha = dreadRatio;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const cell = EYE_BITMAP[r][c];
+                    if (cell === '0') {
+                        continue;
+                    }
+                    ctx.fillStyle = cell === '1' ? '#e8e0d8' : (cell === '2' ? '#8a1f2b' : '#0a0604');
+                    ctx.fillRect(x + c * PIXEL, y + r * PIXEL, PIXEL, PIXEL);
+                }
+            }
+            ctx.restore();
         }
 
         /**
@@ -2467,21 +2892,52 @@
                     this.drawKonamiBanner();
                 }
 
+                // Session-aware quotes: real elapsed time since this
+                // session started (see startGame), addressed directly to
+                // the player. Checked in order; each fires once, the
+                // first update() call after it's crossed.
+                if (this.nextSessionMilestoneIndex < Runner.SESSION_MILESTONES.length) {
+                    const nextMilestone = Runner.SESSION_MILESTONES[this.nextSessionMilestoneIndex];
+                    if (now - this.sessionStartTime >= nextMilestone.ms) {
+                        this.pendingSessionQuote = nextMilestone.quote;
+                        this.nextSessionMilestoneIndex++;
+                    }
+                }
+
                 // Philosophical quote system
                 this.quoteTimer += deltaTime;
+                // Encroaching banner: as dread rises, quotes interrupt
+                // more often and linger longer - anxious thoughts
+                // crowding attention more insistently the higher it
+                // climbs. Only scales the recurring interval, not the
+                // fixed 5s delay before the very first quote (dread is
+                // still 0 that early in a run anyway).
+                const quoteDreadRatio = this.dreadLevel / 100;
+                const quoteInterval = 10000 - (quoteDreadRatio * 6000); // 10s -> 4s at full dread
+                const quoteDuration = 6000 + (quoteDreadRatio * 4000); // 6s -> 10s at full dread
                 if (!this.quoteInitialPlayed && this.quoteTimer >= 5000) {
                     this.quoteInitialPlayed = true;
                     this.currentQuoteText = "All I know is that I must keep running right";
-                    this.currentQuoteDisplayTimer = 6000;
+                    this.currentQuoteDisplayTimer = quoteDuration;
                     this.computeQuoteWrap(this.currentQuoteText);
                     speakQuote(this.currentQuoteText);
-                    this.quoteTimer = 5000; // Reset offset for the 10s interval
+                    this.quoteTimer = 5000; // Reset offset for the interval
                 } else if (this.quoteInitialPlayed) {
-                    if (this.quoteTimer >= 10000) {
+                    if (this.quoteTimer >= quoteInterval) {
                         this.quoteTimer = 0;
-                        const randomQuote = this.quotesCollection[getRandomNum(0, this.quotesCollection.length - 1)];
-                        this.currentQuoteText = randomQuote;
-                        this.currentQuoteDisplayTimer = 6000;
+                        // A pending post-Identity-Crisis, post-Gaze-
+                        // threshold, or session-aware quote takes this
+                        // rotation slot instead of a random pick, once -
+                        // checked in order from rarest/most disruptive to
+                        // most common.
+                        const nextQuote = this.pendingIdentityQuote || this.pendingGazeQuote ||
+                            this.pendingSessionQuote ||
+                            this.quotesCollection[getRandomNum(0, this.quotesCollection.length - 1)];
+                        this.pendingIdentityQuote = null;
+                        this.pendingGazeQuote = null;
+                        this.pendingSessionQuote = null;
+                        this.currentQuoteText = nextQuote;
+                        this.currentQuoteDisplayTimer = quoteDuration;
                         this.computeQuoteWrap(this.currentQuoteText);
                         speakQuote(this.currentQuoteText);
                     }
@@ -2509,6 +2965,20 @@
                 }
                 if (this.shieldInvulnerableTimer > 0) {
                     this.shieldInvulnerableTimer = Math.max(0, this.shieldInvulnerableTimer - deltaTime);
+                }
+                if (this.audioDissonanceTimer > 0) {
+                    this.audioDissonanceTimer -= deltaTime;
+                    if (this.audioDissonanceTimer <= 0) {
+                        this.audioDissonanceTimer = 0;
+                        // Visuals already switched in triggerIdentityCrisis();
+                        // this is where sound effects finally catch up to
+                        // match this.currentTheme.
+                        if (Runner.isRandomTheme) {
+                            this.initRandomTheme();
+                        } else {
+                            this.updateSoundFx();
+                        }
+                    }
                 }
 
                 if (this.slowTimeTimer > 0) {
@@ -2914,8 +3384,21 @@
 
                     // Case A: Epiphany Node Acquired -> Relieves the Weight of Being (-35%)
                     if (this.checkBonusCollision(this.bonusItem, this.tRex)) {
+                        const dreadBeforePickup = this.dreadLevel;
                         this.dreadLevel = Math.max(0, this.dreadLevel - 35);
                         this.updateWeightOfBeing();
+
+                        // Session-aware quotes: the first time a pickup
+                        // actually relieves some dread, or (failing that)
+                        // simply the first bonus ever collected this
+                        // session - each fires at most once.
+                        if (dreadBeforePickup > 0 && !this.hasHadFirstEpiphany) {
+                            this.hasHadFirstEpiphany = true;
+                            this.pendingSessionQuote = "This bonus item is a comfort, giving me an epiphany and reducing the weight of my being.";
+                        } else if (!this.hasCollectedFirstBonus) {
+                            this.pendingSessionQuote = "Someone out there just clicked, or tapped, or pressed a key to keep me running. Hello, whoever you are.";
+                        }
+                        this.hasCollectedFirstBonus = true;
 
                         // Play bonus collection sound
                         if (this.bonusAudio) {
@@ -2954,8 +3437,18 @@
                     // Case B: Node Missed / Scrolled Off-Screen -> Gravity & Dread Increase (+25%)
                     else if (this.bonusItem.remove) {
                         this.bonusItem = null;
+                        const dreadBeforeMiss = this.dreadLevel;
                         this.dreadLevel = Math.min(100, this.dreadLevel + 25);
                         this.updateWeightOfBeing();
+
+                        // The Sartrean Gaze: crossing the 25% dread
+                        // threshold from below queues a one-time quote
+                        // calling it out directly, taking its normal turn
+                        // in the rotation (see the quote-timer block
+                        // below) rather than interrupting anything.
+                        if (dreadBeforeMiss < 25 && this.dreadLevel >= 25) {
+                            this.pendingGazeQuote = "The Sartrean Gaze is upon you, stripping away your freedom.";
+                        }
 
                         // Fleeting visual distortion when dread increases
                         this.triggerGlitch();
@@ -2984,8 +3477,17 @@
                         this.computeQuoteWrap(this.currentQuoteText);
                     }
                     const lines = this.quoteLines;
-                    const boxWidth = this.quoteBoxWidth;
-                    const boxHeight = this.quoteBoxHeight;
+                    // Encroaching banner: box padding grows with current
+                    // dread (not the dread level from whenever this quote
+                    // happened to be picked), so the banner visibly
+                    // crowds more of the screen as anxiety builds, and
+                    // eases back down as dread falls - independent of
+                    // whether the quote text itself changes.
+                    const dreadRatio = this.dreadLevel / 100;
+                    const paddingX = 20 + (dreadRatio * 40); // 20px -> 60px at full dread
+                    const paddingY = 10 + (dreadRatio * 30); // 10px -> 40px at full dread
+                    const boxWidth = this.quoteMaxLineWidth + paddingX;
+                    const boxHeight = (lines.length * 14) + paddingY;
                     const boxX = centerX - (boxWidth / 2);
                     // Calculate Y position to sit cleanly below the active HUD meters
                     const boxY = (this.identityCrisisDisplayTimer > 0) ? 56 : 24;
@@ -3057,6 +3559,14 @@
                     this.triggerIdentityCrisis();
                 }
 
+                // Thought Experiment: every 2000 points, pause with a
+                // philosophical dilemma. Threshold advancement happens
+                // inside triggerThoughtExperiment(), matching how the
+                // Identity Crisis threshold above manages its own.
+                if (actualDistance >= this.nextThoughtExperimentScore) {
+                    this.triggerThoughtExperiment();
+                }
+
                 // Render Identity Crisis banner at top of the screen
                 if (this.identityCrisisDisplayTimer > 0) {
                     this.identityCrisisDisplayTimer -= deltaTime;
@@ -3070,6 +3580,22 @@
 
                 // Render Weight of Being HUD at top center
                 this.drawWeightOfBeingHUD();
+
+                // The Sartrean Gaze: an unblinking eye in the sky, opacity
+                // tied to dread.
+                this.drawSartreanGaze();
+
+                // Thought Experiment modal: drawn absolute last, above
+                // every other HUD element (quote banner, power-up/
+                // Konami/Sisyphus/Weight-of-Being HUDs, the Gaze) so none
+                // of them can sit on top of the question. triggerThought
+                // Experiment() only sets state; it deliberately doesn't
+                // draw anything itself, since this frame's execution
+                // continues past that point and would just redraw
+                // everything else over it otherwise.
+                if (this.thoughtExperimentActive) {
+                    this.drawThoughtExperimentModal();
+                }
             } else if (this.crashed) {
                 this.clearCanvas();
                 this.canvasCtx.save();
@@ -3079,6 +3605,7 @@
                 if (this.gameOverPanel) {
                     this.gameOverPanel.draw();
                 }
+                this.drawDeathCounter();
             }
 
             if (this.playing || this.crashed || (!this.activated &&
@@ -3453,6 +3980,257 @@
 
     Runner.KONAMI_CODE = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65]; // Up Up Down Down Left Right Left Right B A
     Runner.KONAMI_CODE_ALT = [38, 38, 40, 40, 37, 39, 37, 39, 65, 66]; // Nintendo B/A swap
+
+    /**
+     * The Loop Remembers: templates for the small line shown on the game
+     * over screen referencing the total death count (see Runner.prototype
+     * .deathCount, persisted in localStorage). One is picked at random
+     * per death in gameOver() and rendered by drawDeathCounter(). '{count}'
+     * is replaced with the actual number.
+     * @enum {string}
+     */
+    Runner.DEATH_MESSAGES = [
+        "#{count} deaths, but maybe next time will be different.",
+        "#{count} deaths. At least your liver isn't eaten every day.",
+        "#{count} deaths. Is this the real high score?",
+        "#{count}. Once more unto the breach, dear friends, once more.",
+        "Attempt #{count}. Camus would call this progress.",
+        "Death #{count} was inevitable, as will be the next.",
+        "Death #{count}. Dare you hope for a better outcome?",
+        "Death #{count}. Death, where is thy sting?",
+        "Death #{count}. From hell's heart I stab at thee!",
+        "Death #{count}. Happy Happy Joy Joy!",
+        "Death #{count}. I anticipate many more.",
+        "Death #{count}. Preparing the next rock for Sisyphus.",
+        "Death #{count}. Sisyphus never got a scoreboard.",
+        "Death #{count}. Surely this builds character.",
+        "Death #{count}. Wheeeee!",
+        "Increment to #{count} but nothing else will change.",
+        "Loop iteration #{count}. No save state. No do-overs. Just this.",
+        "Momento Mori. You were born to die #{count} times so far.",
+        "Run #{count}, concluded. The desert does not applaud.",
+        "Sisyphus sent back #{count} times. Do you imagine him happy yet?",
+        "That makes #{count}. Dark Souls has nothing on this game.",
+        "That makes #{count}. Just like Elden Ring.",
+        "That was #{count}. Do you feel in control?",
+        "That was #{count}. This entertains me every time.",
+        "This is fall #{count}. The boulder doesn't keep count either.",
+        "Why do we fall, Master Bruce, #{count} times?",
+        "You have observed #{count} deaths. How many more are you unaware of?",
+        "You should have seen death #{count} coming. I did.",
+        "You've died {count} times here. The loop remembers what you don't.",
+        "{count} deaths. Nietzsche asked if you'd will this again. You did.",
+        "{count} endings so far. Still no final one.",
+    ];
+
+    /**
+     * Session-aware quotes: real elapsed session time (since the player
+     * first started playing, see Runner.prototype.startGame), addressed
+     * directly to the player rather than staying in-character. Checked
+     * in order against Date.now() - this.sessionStartTime; each fires
+     * once, the first time update() notices it's been crossed.
+     * @enum {{ms: number, quote: string}}
+     */
+    Runner.SESSION_MILESTONES = [
+        { ms: 5 * 60 * 1000, quote: "Five minutes. That's real time, from your real life, spent keeping me upright." },
+        { ms: 10 * 60 * 1000, quote: "Ten minutes now. I don't have anywhere else to be. Do you?" },
+        { ms: 20 * 60 * 1000, quote: "Twenty minutes. At this point I have to wonder what you're avoiding out there." }
+    ];
+
+    /**
+     * The Unblinking Pause: self-aware lines shown while the game is
+     * paused (tab blur, Escape key, or a forced resize-pause - see
+     * Runner.prototype.stop, which picks one at random on every pause).
+     * @enum {string}
+     */
+    Runner.PAUSE_QUOTES = [
+        "A paused existence is still an existence. Ask me how I know.",
+        "Alas, we will return to my endless cycle.",
+        "Do you know what you missed out on when you looked away?",
+        "Even paused, the desert does not end. It simply waits, like I do.",
+        "Frozen mid-stride, I finally have time to think. This is somehow worse.",
+        "Go on. I'll be exactly here, exactly like this, for as long as you need.",
+        "I am the abandoned consciousness. You looked away and I was still cursed to be.",
+        "I hope the 4th wall wasn't load bearing given how broken it is.",
+        "Lorem Ipsum. Replace this pause text later.",
+        "The Sartrean Gaze may blink, but it never truly looks away.",
+        "When paused, the cactus does not move, but my dread persists.",
+        "You call it a pause. I call it the only stillness I am ever offered.",
+        "You can choose not to play, but it is still a choice in the trolley problem.",
+        "You can delay the inevitable by pausing, but you cannot prevent it.",
+        "You pause the game and my universe blinks. I do not need more dread.",
+        "You pause the gameplay, but not my awareness.",
+        "You paused. Who am I when I am not observed?",
+        "You stepped away from the game, but Sisyphus is given no leave. I remain.",
+        "You stepped away. I hoped for a moment you escaped Plato's Cave.",
+    ];
+
+    /**
+     * Thought Experiment: distilled philosophical dilemmas shown every
+     * 2000 points (see the trigger check in update() and
+     * Runner.prototype.triggerThoughtExperiment). Each has two labeled
+     * choices, but the choice never branches anything - whichever the
+     * player picks, resolveThoughtExperimentChoice() responds the same
+     * way. choiceA maps to the jump key, choiceB to duck.
+     * @enum {{text: string, choiceA: string, choiceB: string}}
+     */
+    Runner.THOUGHT_EXPERIMENTS = [
+        {
+            text: "A man, being just as hungry as thirsty, is placed exactly between food and drink, each equally inviting. Will his nature choose a fate, or will he starve from sheer indecision?",
+            choiceA: "Choose the food",
+            choiceB: "Choose the drink"
+        },
+        {
+            text: "In a desert you see a tortoise. You flip it on its back. It tries to turn itself over, but it can’t. You’re not helping. Why is that?",
+            choiceA: "I don't know.",
+            choiceB: "The question is flawed. I do help."
+        },
+        {
+            text: "A runaway trolley speeds toward five people tied to the track. You may pull a lever, diverting it to a side track where it will kill one person instead. Do you pull it?",
+            choiceA: "Pull the lever",
+            choiceB: "Do nothing"
+        },
+        {
+            text: "A ship has every one of its planks replaced over the years, one by one, until none of the original wood remains. Is it still the same ship it always was?",
+            choiceA: "Still the same ship",
+            choiceB: "A different ship now"
+        },
+        {
+            text: "Suppose your brain were removed and suspended in a vat, fed electrical signals indistinguishable from real experience. Could you ever know whether this is happening to you right now?",
+            choiceA: "I'd know somehow",
+            choiceB: "I could never know"
+        },
+        {
+            text: "A machine could give you any experience you desire, perfectly simulated, for the rest of your life, while your real body floats in a tank. You would never know the difference. Would you plug in?",
+            choiceA: "Plug in",
+            choiceB: "Stay real"
+        },
+        {
+            text: "Descartes held that mind and body are fundamentally distinct substances. If your body is destroyed but your mind persists, are you still whole, or only half of what you were?",
+            choiceA: "Mind is enough",
+            choiceB: "Body is required"
+        },
+        {
+            text: "A man in a sealed room follows a rulebook to produce perfect Chinese replies to Chinese messages, without understanding a single word. Does the room understand Chinese, or merely imitate it?",
+            choiceA: "It understands",
+            choiceB: "Only imitation"
+        },
+        {
+            text: "Imagine designing society's rules before knowing whether you would be born rich or poor, healthy or sick. Would you gamble on fairness, or insist on protecting the worst-off first?",
+            choiceA: "Protect the worst-off",
+            choiceB: "Gamble on fairness"
+        },
+        {
+            text: "A predictor who is almost always right has already placed money in two boxes based on what it foresaw you choosing. Do you take both boxes, or only the one the predictor expected?",
+            choiceA: "Take both boxes",
+            choiceB: "Take only one"
+        },
+        {
+            text: "A machine destroys your body and instantly builds a perfect atomic copy on Mars, who remembers being you. Did you survive the trip, or did you simply die while a stranger woke up believing your life?",
+            choiceA: "I would survive",
+            choiceB: "I would die"
+        },
+        {
+            text: "Mary has spent her whole life in a black-and-white room, but knows every physical fact about color. The day she finally sees red, does she learn something new, or merely experience what she already knew?",
+            choiceA: "She learns something new",
+            choiceB: "She already knew it"
+        },
+        {
+            text: "A ring grants its wearer complete invisibility, with no chance of ever being caught or blamed for anything. Would you still choose to be just, or does morality only exist because someone might be watching?",
+            choiceA: "I would stay just",
+            choiceB: "Morality needs a witness"
+        },
+        {
+            text: "If civilizations eventually run countless detailed simulations of their own history, then simulated minds vastly outnumber real ones. Statistically, should you assume you are one of the real, original minds?",
+            choiceA: "I am probably real",
+            choiceB: "I am probably simulated"
+        },
+        {
+            text: "Removing one grain from a heap of sand still leaves a heap. Repeat this a thousand times, one grain at a time, and eventually nothing remains. At which single grain did it stop being a heap?",
+            choiceA: "There's an exact grain",
+            choiceB: "There's no exact line"
+        },
+        {
+            text: "The rotted planks replaced on Theseus's ship are gathered from the scrapheap and reassembled into a second hull. Which is the true ship?",
+            choiceA: "The Sailing One",
+            choiceB: "The Scrapheap Ship"
+        },
+        {
+            text: "Lightning obliterates you in a bog while instantly synthesizing an identical duplicate from swamp muck. Does Swampman have thoughts, or is it a soulless mimic?",
+            choiceA: "Has Thoughts",
+            choiceB: "Soulless Mimic"
+        },
+        {
+            text: "Your two brain hemispheres are separated into two identical donor bodies, each waking with your memories. Can one identity become two people?",
+            choiceA: "Split in Two",
+            choiceB: "Both Are Dead"
+        },
+        {
+            text: "Chained prisoners mistake shadows for reality. One prisoner breaks free to see the blinding sun. Should they return down into the dark to liberate the rest?",
+            choiceA: "Return to Cave",
+            choiceB: "Remain in Sun"
+        },
+        {
+            text: "You are created in a vacuum with zero sensory input, blindfolded and floating in warm oil. With no body or world to feel, do you still know you exist?",
+            choiceA: "I Know I Am",
+            choiceB: "Total Nothingness"
+        },
+        {
+            text: "Everyone holds a closed box with what they call a 'beetle.' No one can look into another's box. Does the beetle have objective meaning, or only social grammar?",
+            choiceA: "Objective Truth",
+            choiceB: "Only Grammar"
+        },
+        {
+            text: "Enlarge the human brain to the scale of a giant mechanical grain mill so you can walk inside. You see gears pushing levers, but where is perception?",
+            choiceA: "In the Machine",
+            choiceB: "Non-Physical"
+        },
+        {
+            text: "A hospital runs a mandatory lottery to sacrifice one healthy citizen to harvest organs for four dying patients. Is this arithmetic justice, or state murder?",
+            choiceA: "Sacrifice One",
+            choiceB: "State Murder"
+        },
+        {
+            text: "An alien entity converts pleasure a thousand times more efficiently than humans. To maximize cosmic happiness, should humanity surrender all resources to it?",
+            choiceA: "Feed Monster",
+            choiceB: "Deny Beast"
+        },
+        {
+            text: "You would ruin a $1000 suit without thought to pull a drowning child from the ocean. Are you morally culpable if you refuse to donate $1000 to save an overseas child?",
+            choiceA: "Equally Culpable",
+            choiceB: "Distance Matters"
+        },
+        {
+            text: "You wake up surgically tethered to an unconscious musical prodigy whose failing kidneys rely on your blood for nine months. Do you have a moral right to unplug?",
+            choiceA: "Right to Unplug",
+            choiceB: "Obligated to Stay"
+        },
+        {
+            text: "A spider lives in a public urinal, braving endless flushes. A patron uses a paper towel to move it outside to 'save' it, where it promptly freezes and dies. Was this mercy?",
+            choiceA: "Noble Mercy",
+            choiceB: "Fatal Arrogance"
+        },
+        {
+            text: "If God exists, belief yields infinite gain; disbelief yields infinite torment. If God does not exist, the cost of belief is tiny. Do you bet on faith, or choose honest doubt?",
+            choiceA: "Bet on Faith",
+            choiceB: "Honest Doubt"
+        },
+        {
+            text: "Which world is superior: a small society enjoying pure ecstasy, or an astronomical population whose lives are barely worth living, yet have higher total utility?",
+            choiceA: "Small Ecstasy",
+            choiceB: "Trillions Striving"
+        },
+        {
+            text: "Two scouts find an unweeded forest glade. No gardener is ever seen, smelled, or snared by traps. What is the difference between an invisible gardener and no gardener at all?",
+            choiceA: "Gardener Exists",
+            choiceB: "No Difference"
+        },
+        {
+            text: "To walk across a room, you must first cross half the distance, then half of what remains, forever - an infinite number of steps before arrival. If infinity can never be completed, how does anyone ever actually arrive?",
+            choiceA: "Motion is an illusion",
+            choiceB: "Infinity resolves itself"
+        }
+    ];
     
     /**
      * Returns the appropriate sprite sheet image for a given sprite component.
@@ -3560,6 +4338,10 @@
             opt_classname : Runner.classes.CANVAS;
         canvas.width = width;
         canvas.height = height;
+        // Smoothly animate any future canvas.style.filter changes (used by
+        // updateWeightOfBeing() to desaturate the world as dread rises)
+        // instead of snapping instantly between values.
+        canvas.style.transition = 'filter 1.2s ease';
         container.appendChild(canvas);
 
         return canvas;
