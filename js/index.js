@@ -177,6 +177,12 @@
             this.nextThoughtExperimentScore = 2000;
             this.thoughtExperimentActive = false;
             this.currentThoughtExperiment = null;
+            // Real timestamp (not a countdown decremented in update() -
+            // that loop doesn't run at all while paused for this modal)
+            // used to ignore input for a couple seconds after showing a
+            // question, so a button mash mid-obstacle-dodge can't
+            // instantly dismiss it before the player has even read it.
+            this.thoughtExperimentShownAt = 0;
             this.currentTheme = Runner.getActiveTheme();
 
             // The Loop Remembers: a total-death count that survives
@@ -1988,6 +1994,7 @@
             this.currentThoughtExperiment = Runner.THOUGHT_EXPERIMENTS[
                 getRandomNum(0, Runner.THOUGHT_EXPERIMENTS.length - 1)];
             this.thoughtExperimentActive = true;
+            this.thoughtExperimentShownAt = getTimeStamp();
             this.playing = false;
             this.paused = true;
             this.clearGlitch();
@@ -2089,9 +2096,21 @@
          * window gives the player a moment to re-orient, rather than
          * dropping them back into full-speed danger immediately after
          * reading a paragraph.
+         *
+         * Input is ignored for the first Runner.THOUGHT_EXPERIMENT_INPUT
+         * _LOCKOUT_MS of a question's display - without this, a button
+         * mashed mid-obstacle-dodge in the instant before the pause
+         * lands can dismiss the question before it's even readable.
+         * Checked against a real timestamp rather than a countdown,
+         * since update() (and any timer decremented there) doesn't run
+         * at all while paused for this modal.
          */
         resolveThoughtExperimentChoice() {
             if (!this.thoughtExperimentActive) {
+                return;
+            }
+            if (getTimeStamp() - this.thoughtExperimentShownAt <
+                Runner.THOUGHT_EXPERIMENT_INPUT_LOCKOUT_MS) {
                 return;
             }
             this.thoughtExperimentActive = false;
@@ -3079,7 +3098,7 @@
                     for (let b = this.horizon.obstacles.length - 1; b >= 0; b--) {
                         const targetObs = this.horizon.obstacles[b];
                         if (!targetObs || !targetObs.typeConfig) continue;
-                        if (targetObs.typeConfig.type === 'GAP' || targetObs.typeConfig.type === 'PLATFORM_GAP' || targetObs.typeConfig.type === 'COLLAPSING_PLATFORM' || targetObs.typeConfig.type === 'ICE') {
+                        if (targetObs.typeConfig.type === 'GAP' || targetObs.typeConfig.type === 'PLATFORM_GAP' || targetObs.typeConfig.type === 'COLLAPSING_PLATFORM' || targetObs.typeConfig.type === 'LEAP_OF_FAITH' || targetObs.typeConfig.type === 'ICE') {
                             continue;
                         }
                         // Target obstacles ahead of T-Rex within blast range
@@ -3163,7 +3182,7 @@
                         if (playerFootX >= obs.xPos + 6 && playerFootX <= obs.xPos + obs.width - 6) {
                             isOverWater = true;
                         }
-                    } else if (obs.typeConfig.type === 'PLATFORM_GAP' || obs.typeConfig.type === 'COLLAPSING_PLATFORM') {
+                    } else if (obs.typeConfig.type === 'PLATFORM_GAP' || obs.typeConfig.type === 'COLLAPSING_PLATFORM' || obs.typeConfig.type === 'LEAP_OF_FAITH') {
                         const pLeft = obs.xPos + obs.typeConfig.platOffset;
                         const pRight = pLeft + obs.typeConfig.platWidth;
 
@@ -3187,10 +3206,25 @@
                                     inPit = false;
                                 }
                             } else {
-                                // Standard stable island
+                                // Standard stable island (also covers The
+                                // Leap of Faith's platform, which is
+                                // mechanically identical - only its
+                                // visibility differs, handled below).
                                 const platSurfaceY = 227 - obs.typeConfig.platHeight;
                                 targetGroundY = platSurfaceY - (227 - this.tRex.defaultGroundY);
                                 inPit = false;
+
+                                // The Leap of Faith: reveal the platform
+                                // only once the player is almost touching
+                                // down on it - a "trust rewarded" moment
+                                // right before impact, rather than a
+                                // visible landing zone for the whole
+                                // approach. Stays revealed permanently
+                                // once triggered.
+                                if (obs.typeConfig.type === 'LEAP_OF_FAITH' && !obs.leapRevealed &&
+                                    this.tRex.yPos >= targetGroundY - Runner.LEAP_OF_FAITH_REVEAL_DISTANCE) {
+                                    obs.leapRevealed = true;
+                                }
                             }
                             break;
                         } else if (playerFootX > pRight && playerFootX <= obs.xPos + obs.width - 6) {
@@ -4066,6 +4100,15 @@
     ];
 
     /**
+     * How long (ms) input is ignored after a Thought Experiment modal
+     * appears, so a button mashed mid-obstacle-dodge can't instantly
+     * dismiss the question before it's even readable. See
+     * Runner.prototype.resolveThoughtExperimentChoice.
+     * @const
+     */
+    Runner.THOUGHT_EXPERIMENT_INPUT_LOCKOUT_MS = 2000;
+
+    /**
      * Thought Experiment: distilled philosophical dilemmas shown every
      * 2000 points (see the trigger check in update() and
      * Runner.prototype.triggerThoughtExperiment). Each has two labeled
@@ -4514,7 +4557,7 @@
         }
 
         // Ignore collision checks for non-lethal terrain gaps, platforms, or ice
-        if (obstacle.typeConfig.type === 'GAP' || obstacle.typeConfig.type === 'PLATFORM_GAP' || obstacle.typeConfig.type === 'COLLAPSING_PLATFORM' || obstacle.typeConfig.type === 'ICE') {
+        if (obstacle.typeConfig.type === 'GAP' || obstacle.typeConfig.type === 'PLATFORM_GAP' || obstacle.typeConfig.type === 'COLLAPSING_PLATFORM' || obstacle.typeConfig.type === 'LEAP_OF_FAITH' || obstacle.typeConfig.type === 'ICE') {
             return false;
         }
 
@@ -4738,6 +4781,12 @@
             this.collapseDropY = 0;
             this.collapseShakeX = 0;
 
+            // The Leap of Faith: the platform stays invisible until the
+            // player is almost touching down on it (see the ground-height
+            // resolution in Runner.prototype.update), then stays revealed
+            // permanently for the rest of this obstacle's lifetime.
+            this.leapRevealed = false;
+
             // For animated obstacles.
             this.currentFrame = 0;
             this.timer = 0;
@@ -4849,9 +4898,11 @@
                 return;
             }
 
-            // Render elevated grass islands (standard & collapsing variants)
-            if (this.typeConfig.type === 'PLATFORM_GAP' || this.typeConfig.type === 'COLLAPSING_PLATFORM') {
+            // Render elevated grass islands (standard, collapsing, and
+            // Leap of Faith variants)
+            if (this.typeConfig.type === 'PLATFORM_GAP' || this.typeConfig.type === 'COLLAPSING_PLATFORM' || this.typeConfig.type === 'LEAP_OF_FAITH') {
                 const isCollapsing = (this.typeConfig.type === 'COLLAPSING_PLATFORM');
+                const isLeapOfFaith = (this.typeConfig.type === 'LEAP_OF_FAITH');
                 const shake = isCollapsing ? this.collapseShakeX : 0;
                 const dropY = isCollapsing ? this.collapseDropY : 0;
 
@@ -4861,11 +4912,16 @@
                 const pHeight = this.typeConfig.platHeight;
                 const pY = (227 - pHeight) + dropY;
 
-                // Draw the water body across the entire gap
+                // Draw the water body across the entire gap. For The Leap
+                // of Faith, this is ALL that's visible until the platform
+                // reveals (see leapRevealed, set in update()'s ground-
+                // height resolution) - making the pit look impossibly
+                // wide and empty until the very last moment.
                 drawWater(this.canvasCtx, Runner.waterImage, this.xPos, 227, this.width, 23);
 
-                // If platform has plunged completely below the canvas, skip drawing the slab
-                if (pY < this.dimensions.HEIGHT + 10) {
+                // If platform has plunged completely below the canvas, skip drawing the slab.
+                // For The Leap of Faith, also skip entirely until revealed.
+                if (pY < this.dimensions.HEIGHT + 10 && (!isLeapOfFaith || this.leapRevealed)) {
                     // Floating island underbelly (dirt slab)
                     this.canvasCtx.fillStyle = isCollapsing ? '#2e261f' : '#3a3a3a';
                     this.canvasCtx.fillRect(pStart + 1, pY + 10, pWidth - 2, 8);
@@ -5093,6 +5149,16 @@
      */
     Obstacle.MAX_OBSTACLE_LENGTH = 3;
 
+    /**
+     * The Leap of Faith: how many pixels above the (invisible) platform
+     * surface the player's feet must be before it reveals itself - a
+     * small distance, so the reveal lands right before touchdown rather
+     * than announcing the platform's position while still approaching.
+     * See the reveal check in Runner.prototype.update and the render
+     * gate in Obstacle.prototype.draw.
+     * @const
+     */
+    Runner.LEAP_OF_FAITH_REVEAL_DISTANCE = 12;
 
     /**
      * Obstacle definitions.
@@ -5195,6 +5261,21 @@
             platWidth: 180,      // Extended runway (180px) for high-speed reaction
             platHeight: 28,      // Elevation above ground
             collapseDelay: 200,  // Milliseconds of trembling before dropping
+            collisionBoxes: []
+        },
+        {
+            type: 'LEAP_OF_FAITH',
+            width: 420,          // Wider overall span than COLLAPSING_PLATFORM's 380
+            height: 50,
+            yPos: 195,
+            multipleSpeed: 999,
+            minGap: 260,
+            minSpeed: 5.5,       // Only appears once the game is already fast
+            platOffset: 115,     // First gap: wider than any other platform type's -
+                                 // by itself, further than a jump can reliably clear
+            platWidth: 170,      // Landing zone - stable once found, but invisible
+                                 // until leapRevealed (see update()/draw())
+            platHeight: 28,      // Elevation above ground
             collisionBoxes: []
         },
     ];
